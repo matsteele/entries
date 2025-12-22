@@ -1,0 +1,71 @@
+{
+  "contexts": {
+    "cultivo": {
+      "name": "Cultivo",
+      "objectives": {
+        "obj-cultivo-general": {
+          "id": "obj-cultivo-general",
+          "title": "General work",
+          "scope": "ongoing",
+          "status": "active",
+          "created": "2025-11-14",
+          "projects": {
+            "proj-cultivo-001": {
+              "id": "proj-cultivo-001",
+              "title": "Analysis service refactor",
+              "status": "active",
+              "created": "2025-11-14",
+              "plan_id": "plan-refactor-analysis-service"
+            }
+          }
+        }
+      }
+    },
+    "personal": {
+      "name": "Personal",
+      "objectives": {
+        "obj-personal-001": {
+          "id": "obj-personal-001",
+          "title": "Systems and tools",
+          "scope": "ongoing",
+          "status": "active",
+          "created": "2025-11-13",
+          "projects": {
+            "proj-personal-001": {
+              "id": "proj-personal-001",
+              "title": "Entries project - RAG system with PGVector",
+              "status": "in_progress",
+              "created": "2025-11-13",
+              "plan_id": "plan-entries-project-rag-system-with-pgvector"
+            },
+            "proj-personal-002": {
+              "id": "proj-personal-002",
+              "title": "Fitness tracking RAG",
+              "status": "in_progress",
+              "created": "2025-11-13",
+              "plan_id": "plan-fitness-tracking-rag"
+            }
+          }
+        },
+        "obj-personal-002": {
+          "id": "obj-personal-002",
+          "title": "Travel and lifestyle",
+          "scope": "weekly",
+          "status": "active",
+          "created": "2025-11-13",
+          "projects": {}
+        }
+      }
+    }
+  },
+  "backlog": {
+    "objectives": [
+      {
+        "id": "obj-backlog-001",
+        "title": "Learn machine learning fundamentals",
+        "created": "2025-02-01",
+        "notes": "Need to organize this into a proper objective with projects"
+      }
+    ]
+  }
+}

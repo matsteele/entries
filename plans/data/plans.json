@@ -1,0 +1,46 @@
+{
+  "plans": [
+    {
+      "id": "plan-1763101682932",
+      "title": "Refactor Analysis Service",
+      "type": "project-plan",
+      "status": "draft",
+      "context_id": "cultivo",
+      "objective_id": "obj-cultivo-general",
+      "project_id": "proj-cultivo-001",
+      "created": "2025-11-14",
+      "updated": "2025-11-14",
+      "file": "plan-refactor-analysis-service.md",
+      "generated_tasks": [],
+      "tags": []
+    },
+    {
+      "id": "plan-1763107686748",
+      "title": "Entries Project - RAG System with PGVector",
+      "type": "project-plan",
+      "status": "active",
+      "context_id": "personal",
+      "objective_id": null,
+      "project_id": null,
+      "created": "2025-11-14",
+      "updated": "2025-11-14",
+      "file": "plan-entries-project-rag-system-with-pgvector.md",
+      "generated_tasks": [],
+      "tags": []
+    },
+    {
+      "id": "plan-fitness-tracking-rag",
+      "title": "Entries Project - Fitness Tracking with RAG",
+      "type": "project-plan",
+      "status": "draft",
+      "context_id": "personal",
+      "objective_id": null,
+      "project_id": "entries-fitness-system",
+      "created": "2025-11-16",
+      "updated": "2025-11-16",
+      "file": "plan-fitness-tracking-rag.md",
+      "generated_tasks": [],
+      "tags": []
+    }
+  ]
+}

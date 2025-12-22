@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "journal:add": "node scripts/journal-supabase.js add",
+    "journal:search": "node scripts/journal-supabase.js search",
+    "journal:recent": "node scripts/journal-supabase.js recent",
+    "journal:get": "node scripts/journal-supabase.js get",
+    "journal:help": "node scripts/journal-supabase.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.78.0",
+    "dotenv": "^17.2.3",
+    "openai": "^6.9.0",
+    "pg": "^8.16.3",
+    "postgres": "^3.4.7",
+    "uuid": "^13.0.0"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "name": "entries-planning-backend",
+  "version": "1.0.0",
+  "description": "Planning, journaling, and reflection system",
+  "main": "server.js",
+  "scripts": {
+    "plan:create": "node plan-cli.js create",
+    "plan:list": "node plan-cli.js list",
+    "plan:view": "node plan-cli.js view",
+    "plan:status": "node plan-cli.js status",
+    "plan:delete": "node plan-cli.js delete",
+    "plan:templates": "node plan-cli.js templates",
+    "journal:add": "node journal-cli.js add",
+    "journal:daily": "node journal-cli.js daily",
+    "journal:view": "node journal-cli.js view",
+    "journal:today": "node journal-cli.js today",
+    "daily:start": "node daily-cli.js start",
+    "daily:priority": "node daily-cli.js add-priority",
+    "daily:block": "node daily-cli.js add-block",
+    "daily:logistics": "node daily-cli.js add-logistics",
+    "daily:health": "node daily-cli.js add-health",
+    "daily:view": "node daily-cli.js view",
+    "daily:complete": "node daily-cli.js complete",
+    "log:start-day": "node daily-log-cli.js start-day",
+    "log:current": "node daily-log-cli.js current",
+    "log:complete": "node daily-log-cli.js complete",
+    "log:complete-current": "node daily-log-cli.js complete-current",
+    "log:complete-switch": "node daily-log-cli.js complete-switch",
+    "log:pending": "node daily-log-cli.js pending",
+    "log:show": "node daily-log-cli.js show",
+    "log:note": "node daily-log-cli.js note",
+    "log:note-pending": "node daily-log-cli.js note-pending",
+    "log:note-completed": "node daily-log-cli.js note-completed",
+    "log:pause-current": "node daily-log-cli.js pause-current",
+    "log:p": "node daily-log-cli.js p",
+    "log:p-0": "node daily-log-cli.js p-0",
+    "time:week": "node time-tracker.js week",
+    "time:month": "node time-tracker.js month",
+    "time:year": "node time-tracker.js year",
+    "time:archive": "node time-tracker.js archive"
+  },
+  "keywords": [
+    "planning",
+    "journaling",
+    "reflection",
+    "productivity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

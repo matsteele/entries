@@ -1,0 +1,117 @@
+# ========================================
+# SENSITIVE PERSONAL DATA - DO NOT COMMIT
+# ========================================
+
+# Environment variables and credentials
+.env
+.env.*
+.env.local
+.env.production
+.env.development
+*.env
+
+# Authentication & API keys
+google_auth.json
+.mcp.json
+*_auth.json
+*.pem
+*.key
+*.cert
+
+# Personal daily logs and time tracking
+daily-logs/
+time-logs/
+
+# Personal data files
+decisions.json
+goals.json
+relationships.json
+.current_day_plan.json
+
+# Journal data (contains personal reflections)
+journal/data/
+
+# Database files and backups
+*.db
+*.sqlite
+*.sqlite3
+*.sql.gz
+*.dump
+
+# ========================================
+# DEPENDENCIES & BUILD
+# ========================================
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Package manager locks (keep package.json but could ignore locks if preferred)
+# Uncomment if you don't want to track lock files:
+# package-lock.json
+
+# ========================================
+# OS & EDITOR FILES
+# ========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Thumbnails
+Thumbs.db
+
+# Linux
+*~
+.directory
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+.metadata
+.claude/
+
+# ========================================
+# TEMPORARY & CACHE FILES
+# ========================================
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.cache/
+
+# Screenshots (may contain sensitive info)
+screenshots/
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# ========================================
+# CONFIGURATION FILES (review these)
+# ========================================
+
+# NVM
+.nvmrc
+
+# Optional: Add other config files you want to keep private
