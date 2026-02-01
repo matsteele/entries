@@ -14,19 +14,19 @@ This application supports three interconnected workflows:
 - **Output**: Daily log JSON files, terminal statusline
 - **Key Principle**: Only pull tasks into daily log when ready to work on them today
 
-### 2. 📝 Logging & Journaling (Supabase)
-**Purpose:** Capture and organize life data for semantic search and reflection.
+### 2. 📝 Logging & Journaling (Local Files)
+**Purpose:** Capture and organize life data for reflection and analysis.
 
-- **Input**: Events, contemplations, plans, protocols
-- **Storage**: Supabase with vector embeddings
-- **Tools**: MCP Supabase tools, `scripts/journal-supabase.js`
-- **Output**: Searchable knowledge base of life patterns, decisions, and protocols
+- **Input**: Journal entries, reflections, notes
+- **Storage**: Local JSON files in `journal/data/`
+- **Tools**: `npm run journal:*` scripts, `app/backend/journal-cli.js`
+- **Output**: Local journal entries (private, never committed to git)
 
 ### 3. 🎯 Planning & Backlog Management (Google Tasks + Calendar)
 **Purpose:** Plan future work and manage task backlog.
 
 - **Planning Phase**: 
-  - Pull in existing plans from Supabase
+  - Review existing plans in `plans/data/plans.json`
   - Generate new tasks from plans
   - Store tasks in Google Tasks when confirmed as "will definitely do"
 - **Execution Phase**:
@@ -36,7 +36,7 @@ This application supports three interconnected workflows:
 
 **Flow:**
 ```
-Plans (Supabase) 
+Plans (Local JSON) 
   → Generate Tasks 
     → Google Tasks (backlog) 
       → User favorites for today 
@@ -48,8 +48,8 @@ Plans (Supabase)
 
 **Planning Session:**
 1. User discusses plans, goals, or projects
-2. Search Supabase for existing related plans using semantic search
-3. Update existing plans or create new ones (with vector embeddings)
+2. Review existing plans in local files (`plans/data/plans.json`)
+3. Update existing plans or create new ones
 4. Extract actionable tasks from plans
 5. User confirms tasks → Create in Google Tasks with appropriate list/context
 6. Tasks stay in Google Tasks backlog until user is ready
@@ -72,10 +72,10 @@ Plans (Supabase)
 
 ## Core Workflow
 
-**When user discusses their data (protocols, plans, contemplations, etc.):**
+**When user discusses their data (protocols, plans, journals, etc.):**
 
-1. **Semantic search Supabase** - Find conceptually similar existing entries
-2. **Pull relevant entries** - Bring in related protocols, plans, contemplations for context
+1. **Review existing entries** - Check local files for related content
+2. **Pull relevant context** - Bring in related protocols, plans, journals for context
 3. **Provide commentary** - Offer insights based on what's found and recent activity
 4. **Discuss and reflect** with the user
 5. **Update or create** - When user asks to log:
@@ -88,7 +88,22 @@ Plans (Supabase)
 
 ## Data Location
 
-**All personal data is in Supabase.** Use `mcp__supabase__execute_sql` to query.
+**All personal data is stored in LOCAL JSON FILES.** See `LOCAL_DATABASE.md` for complete documentation.
+
+### Storage Locations
+
+- **Daily logs**: `daily-logs/daily-log-YYYY-MM-DD.json`
+- **Time tracking**: `time-logs/time-log.json`
+- **Journal entries**: `journal/data/`
+- **Plans**: `plans/data/plans.json`
+- **Planning contexts**: `plans/data/planning_contexts.json`
+- **Goals/Decisions/Relationships**: `goals.json`, `decisions.json`, `relationships.json`
+
+⚠️ **All data files are in `.gitignore` and stay local for privacy.**
+
+---
+
+## Data Structure (Historical Reference - was Supabase)
 
 ### `journals` table (by type field)
 
@@ -277,10 +292,19 @@ Local task tracking shown in terminal statusline. These are the tasks for **toda
   - Can override with explicit context: `/t add "task" cul`
 - `/t addS "task" [context]` - Add task and immediately switch to it
 - `/t -N` - Switch to pending task N (context-aware: maps to filtered list)
+- `/t m-N context` - Modify task context (0 for current task, N for pending task)
+  - Valid contexts: per, soc, prof, cul, proj
+  - Example: `/t m-0 cul` (change current task to cultivo)
+  - Example: `/t m-2 per` (change pending task #2 to personal)
 - `/t c-N` - Complete pending task N (context-aware)
 - `/t cs-N` - Complete current task and switch to pending task N
 - `/t p-N` - Move current task to pending
 - `/t d-N` - Delete pending task N (context-aware)
+- `/t jira` - Pull assigned Jira tickets (NOT done) and add to Cultivo pending tasks
+  - Fetches all tickets assigned to you with status NOT IN (Done, Closed)
+  - Automatically deduplicates by Jira ticket number
+  - Stores ticket key (TSP-XXXX) in task for linking
+  - Only adds tickets not already in pending tasks
 - **TODO: `/t pull`** - Pull favorited tasks from Google Tasks into daily log
 
 **Important**: When in a filtered context (e.g., `/t per`), task numbers map to only that context's tasks. So `/t -1` switches to the first personal task, not the first overall task. Use `/t all` to see all tasks.
@@ -291,6 +315,9 @@ Local task tracking shown in terminal statusline. These are the tasks for **toda
 - `npm run log:complete` - Complete current task
 - `npm run log:complete "work description"` - Add completed work to log
 - `npm run log:complete-switch N` - Complete current task and switch to pending task N (clearer interface)
+- `npm run log:modify-context N context` - Modify task context (0=current, N=pending task number)
+  - Example: `npm run log:modify-context 0 cul`
+  - Example: `npm run log:modify-context 2 per`
 - `npm run log:pending "task"` - Add pending task
 - `npm run log:show [date]` - Display daily log
 - `npm run log:note "note text"` - Add note to current task

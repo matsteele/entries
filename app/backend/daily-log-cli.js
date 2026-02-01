@@ -1272,6 +1272,62 @@ function deleteBulkTasks(taskNumbersStr) {
   console.log('');
 }
 
+function modifyTaskContext(taskNumber, newContextCode) {
+  // Normalize the context code
+  const newContext = normalizeContext(newContextCode);
+  
+  // Handle 0 as current task
+  if (taskNumber === 0) {
+    const logData = loadDailyLog();
+    
+    if (!logData.dailyLog.currentTask) {
+      console.log('\n⚠️  No current task to modify.\n');
+      return;
+    }
+    
+    const oldContext = logData.dailyLog.currentTask.activityContext || 'professional';
+    logData.dailyLog.currentTask.activityContext = newContext;
+    
+    // Also update the context filter to match the new context
+    logData.dailyLog.contextFilter = newContext;
+    
+    saveDailyLog(logData);
+    
+    const newContextEmoji = CONTEXT_EMOJI_MAP[newContext] || '💼';
+    const oldContextEmoji = CONTEXT_EMOJI_MAP[oldContext] || '💼';
+    console.log(`\n✅ Current task context modified:`);
+    console.log(`   ${oldContextEmoji} [${oldContext.toUpperCase()}] → ${newContextEmoji} [${newContext.toUpperCase()}]`);
+    console.log(`   ${logData.dailyLog.currentTask.title}\n`);
+    return;
+  }
+
+  // Handle pending tasks
+  const logData = loadDailyLog();
+  const contextFilter = logData.dailyLog.contextFilter || null;
+  const allPendingTasks = logData.dailyLog.pendingTasks || [];
+  const displayTasks = getDisplayOrderedTasks(allPendingTasks, contextFilter);
+
+  if (taskNumber < 1 || taskNumber > displayTasks.length) {
+    console.error(`\n❌ Invalid task number: ${taskNumber}\n`);
+    console.error(`   Valid range: ${contextFilter ? `1-${displayTasks.length} (filtered to ${contextFilter})` : `1-${displayTasks.length}`}\n`);
+    return;
+  }
+
+  const selectedTask = displayTasks[taskNumber - 1];
+  const indexInAll = allPendingTasks.findIndex(t => t.id === selectedTask.id);
+
+  const oldContext = selectedTask.activityContext || 'professional';
+  allPendingTasks[indexInAll].activityContext = newContext;
+
+  saveDailyLog(logData);
+
+  const newContextEmoji = CONTEXT_EMOJI_MAP[newContext] || '💼';
+  const oldContextEmoji = CONTEXT_EMOJI_MAP[oldContext] || '💼';
+  console.log(`\n✅ Task context modified:`);
+  console.log(`   ${oldContextEmoji} [${oldContext.toUpperCase()}] → ${newContextEmoji} [${newContext.toUpperCase()}]`);
+  console.log(`   ${selectedTask.title}\n`);
+}
+
 function clearContextFilter() {
   const logData = loadDailyLog();
   logData.dailyLog.contextFilter = null;
@@ -1726,8 +1782,8 @@ function pullJiraTickets() {
     const jiraUrl = `https://${jiraDomain}/rest/api/3/search/jql`;
 
     const jqlPayload = JSON.stringify({
-      jql: 'assignee=currentUser() AND status NOT IN (Done, Closed) ORDER BY updated DESC',
-      maxResults: 20,
+      jql: 'assignee=currentUser() AND resolution is EMPTY ORDER BY updated DESC',
+      maxResults: 50,
       fields: ['summary', 'status', 'priority', 'issuetype', 'updated']
     });
 
@@ -1744,10 +1800,12 @@ function pullJiraTickets() {
     const logData = loadDailyLog();
     let addedCount = 0;
 
-    // Get existing pending task titles to avoid duplicates
-    const existingTasks = logData.dailyLog.pendingTasks
-      .filter(t => t && t.title)
-      .map(t => t.title.toLowerCase());
+    // Get existing Jira ticket numbers from pending tasks to avoid duplicates
+    const existingJiraTickets = new Set(
+      logData.dailyLog.pendingTasks
+        .filter(t => t && t.jiraTicket)
+        .map(t => t.jiraTicket)
+    );
 
     console.log(`📋 Found ${data.issues.length} active ticket(s):\n`);
 
@@ -1758,14 +1816,17 @@ function pullJiraTickets() {
       const priority = issue.fields.priority?.name || 'Medium';
       const ticketUrl = `https://cultivo.atlassian.net/browse/${ticketKey}`;
 
+      // Skip Done status issues
+      if (status === 'Done') {
+        console.log(`   ✅ ${ticketKey}: ${summary} (already done)`);
+        continue;
+      }
+
       // Create task title with ticket number
       const taskTitle = `[${ticketKey}] ${summary}`;
 
-      // Check if this ticket is already in pending tasks
-      const isDuplicate = existingTasks.some(title =>
-        title.includes(ticketKey.toLowerCase()) ||
-        title.includes(summary.toLowerCase())
-      );
+      // Check if this ticket is already in pending tasks by ticket number
+      const isDuplicate = existingJiraTickets.has(ticketKey);
 
       if (isDuplicate) {
         console.log(`   ⏭️  ${ticketKey}: ${summary} (already in pending)`);
@@ -1842,6 +1903,12 @@ USAGE:
       Example: /t add "Buy groceries" "Call dentist" per
       Example: /t add "Review PR" "Fix bug" cul
 
+  /t m-N <context>
+      Modify task context (0 for current task, N for pending task)
+      Contexts: per, soc, prof, cul, proj
+      Example: /t m-0 cul (change current task to cultivo)
+      Example: /t m-2 per (change pending task #2 to personal)
+
   /t c-[1,3,4,5]
       Complete multiple tasks by number (handles index shifting automatically)
       Example: /t c-[1,3,4,5]
@@ -1857,10 +1924,16 @@ USAGE:
       Example: npm run log:show
       Example: npm run log:show 2025-11-18
 
+  npm run log:modify-context <task-number> <context>
+      Modify task context (terminal command version)
+      Example: npm run log:modify-context 0 cul
+      Example: npm run log:modify-context 2 per
+
 FEATURES:
   • Bulk operations automatically handle index shifting when deleting/completing
   • Multi-task add respects current context filter, defaults to personal
   • Context can be specified per-task or inherited from current filter
+  • Modify task context after creation with m-N command
   • Auto-completes previous task when setting new current task
   • Auto-categorizes completed work (PR, Feature, Bug, etc.)
   • Auto-detects priorities (high, medium, low)
@@ -1884,6 +1957,26 @@ try {
   
   if (command && command.startsWith('d-[')) {
     deleteBulkTasks(command.substring(2));
+    process.exit(0);
+  }
+
+  // Handle modify-context command: m-N where N is task number
+  if (command && command.startsWith('m-')) {
+    const taskNumber = parseInt(command.substring(2));
+    if (isNaN(taskNumber)) {
+      console.error('\n❌ Invalid task number in m-N command\n');
+      console.error('   Usage: m-N <context>\n');
+      console.error('   Example: m-0 cul (modify current task)\n');
+      console.error('   Example: m-2 per (modify pending task #2)\n');
+      process.exit(1);
+    }
+    if (args.length < 1) {
+      console.error('\n❌ Missing context argument\n');
+      console.error('   Usage: m-N <context>\n');
+      console.error('   Valid contexts: per, soc, prof, cul, proj\n');
+      process.exit(1);
+    }
+    modifyTaskContext(taskNumber, args[0]);
     process.exit(0);
   }
 
@@ -2046,6 +2139,17 @@ try {
         process.exit(1);
       }
       addNoteToCompletedWork(args[0], args.slice(1).join(' '));
+      break;
+
+    case 'modify-context':
+      if (args.length < 2 || isNaN(args[0])) {
+        console.error('\n❌ Usage: modify-context <task-number> <context>\n');
+        console.error('   Valid contexts: per, soc, prof, cul, proj\n');
+        console.error('   Example: modify-context 0 cul (modify current task)\n');
+        console.error('   Example: modify-context 2 per (modify pending task #2)\n');
+        process.exit(1);
+      }
+      modifyTaskContext(parseInt(args[0]), args[1]);
       break;
 
     case 'jira':
