@@ -1782,7 +1782,7 @@ function pullJiraTickets() {
     const jiraUrl = `https://${jiraDomain}/rest/api/3/search/jql`;
 
     const jqlPayload = JSON.stringify({
-      jql: 'assignee=currentUser() AND resolution is EMPTY ORDER BY updated DESC',
+      jql: 'assignee=currentUser() ORDER BY updated DESC',
       maxResults: 50,
       fields: ['summary', 'status', 'priority', 'issuetype', 'updated']
     });
@@ -1809,6 +1809,9 @@ function pullJiraTickets() {
 
     console.log(`📋 Found ${data.issues.length} active ticket(s):\n`);
 
+    // Statuses that should not be added to pending tasks
+    const excludedStatuses = ['Done', 'Deployed', "Won't Do", 'Closed'];
+
     for (const issue of data.issues) {
       const ticketKey = issue.key;
       const summary = issue.fields.summary;
@@ -1816,9 +1819,9 @@ function pullJiraTickets() {
       const priority = issue.fields.priority?.name || 'Medium';
       const ticketUrl = `https://cultivo.atlassian.net/browse/${ticketKey}`;
 
-      // Skip Done status issues
-      if (status === 'Done') {
-        console.log(`   ✅ ${ticketKey}: ${summary} (already done)`);
+      // Skip excluded statuses
+      if (excludedStatuses.includes(status)) {
+        console.log(`   ⏭️  ${ticketKey}: ${summary} (${status})`);
         continue;
       }
 
