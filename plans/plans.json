@@ -41,6 +41,34 @@
       "file": "plan-fitness-tracking-rag.md",
       "generated_tasks": [],
       "tags": []
+    },
+    {
+      "id": "plan-community-land-trust-2026",
+      "title": "Community Land Trust Platform",
+      "type": "project-plan",
+      "status": "draft",
+      "context_id": "projects",
+      "objective_id": null,
+      "project_id": "community-land-trust",
+      "created": "2026-01-06",
+      "updated": "2026-01-06",
+      "file": "plan-community-land-trust-platform.md",
+      "generated_tasks": [],
+      "tags": ["real-estate", "investment", "community", "fintech", "tokenization"]
+    },
+    {
+      "id": "plan-podcast-fernando-2026",
+      "title": "Political/Cultural Podcast with Fernando",
+      "type": "project-plan",
+      "status": "draft",
+      "context_id": "personal",
+      "objective_id": null,
+      "project_id": "podcast-fernando",
+      "created": "2026-01-06",
+      "updated": "2026-01-06",
+      "file": "plan-podcast-with-fernando.md",
+      "generated_tasks": [],
+      "tags": ["podcast", "media", "politics", "culture", "content-creation"]
     }
   ]
 }

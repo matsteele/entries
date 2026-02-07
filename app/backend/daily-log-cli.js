@@ -11,7 +11,7 @@ const path = require('path');
 
 // Constants
 const BASE_DIR = path.join(__dirname, '..', '..');
-const LOG_DIR = path.join(BASE_DIR, 'daily-logs');
+const LOG_DIR = path.join(BASE_DIR, 'tracking', 'daily-logs');
 
 // Context emoji mapping
 const CONTEXT_EMOJI_MAP = {
@@ -19,7 +19,9 @@ const CONTEXT_EMOJI_MAP = {
   social: '👥',
   professional: '💼',
   cultivo: '🌱',
-  projects: '🚀'
+  projects: '🚀',
+  health: '💪',
+  unstructured: '☀️'
 };
 
 // Use local date (not UTC) to match statusline
@@ -68,7 +70,9 @@ function loadDailyLog(date = TODAY) {
       social: 0,
       professional: 0,
       cultivo: 0,
-      projects: 0
+      projects: 0,
+      health: 0,
+      unstructured: 0
     }
   };
 }
@@ -83,7 +87,9 @@ function saveDailyLog(logData) {
       social: 0,
       professional: 0,
       cultivo: 0,
-      projects: 0
+      projects: 0,
+      health: 0,
+      unstructured: 0
     };
   }
 
@@ -105,7 +111,9 @@ function updateContextTotals(logData) {
     social: 0,
     professional: 0,
     cultivo: 0,
-    projects: 0
+    projects: 0,
+    health: 0,
+    unstructured: 0
   };
 
   const log = logData.dailyLog;
@@ -198,9 +206,15 @@ function detectContext(description) {
     'implement', 'refactor'
   ];
 
+  const healthKeywords = [
+    'health', 'dentist', 'doctor', 'medical', 'sick', 'gym', 'workout',
+    'exercise', 'therapy', 'physio', 'medication', 'vitamins', 'sleep',
+    'stretch', 'yoga', 'run', 'walk', 'clinic', 'checkup', 'wellness'
+  ];
+
   const personalKeywords = [
-    'dentist', 'doctor', 'appointment', 'personal', 'family', 'health',
-    'medical', 'vacation', 'sick', 'home', 'pet', 'errand', 'errands',
+    'appointment', 'personal', 'family',
+    'vacation', 'home', 'pet', 'errand', 'errands',
     'grocery', 'bank', 'car repair', 'car appointment', 'birthday'
   ];
 
@@ -217,15 +231,27 @@ function detectContext(description) {
     'trading bot', 'saas', 'product', 'side', 'project'
   ];
 
+  const unstructuredKeywords = [
+    'leisure', 'free time', 'relax', 'relaxing', 'tv', 'movie', 'gaming',
+    'game', 'browse', 'browsing', 'youtube', 'scroll', 'scrolling',
+    'unstructured', 'downtime', 'chill', 'netflix', 'reading for fun'
+  ];
+
   const professionalKeywords = [
     'meeting', 'interview', 'job', 'career', 'resume', 'work',
     'presentation', 'conference', 'networking'
   ];
 
-  // Check in priority order: cultivo -> personal -> social -> projects -> professional
+  // Check in priority order: cultivo -> health -> personal -> social -> projects -> unstructured -> professional
   for (const keyword of cultivoKeywords) {
     if (lower.includes(keyword)) {
       return 'cultivo';
+    }
+  }
+
+  for (const keyword of healthKeywords) {
+    if (lower.includes(keyword)) {
+      return 'health';
     }
   }
 
@@ -247,6 +273,12 @@ function detectContext(description) {
     }
   }
 
+  for (const keyword of unstructuredKeywords) {
+    if (lower.includes(keyword)) {
+      return 'unstructured';
+    }
+  }
+
   for (const keyword of professionalKeywords) {
     if (lower.includes(keyword)) {
       return 'professional';
@@ -265,18 +297,22 @@ function normalizeContext(contextCode) {
     'prof': 'professional',
     'cul': 'cultivo',
     'proj': 'projects',
+    'heal': 'health',
+    'us': 'unstructured',
     // Also accept full names
     'personal': 'personal',
     'social': 'social',
     'professional': 'professional',
     'cultivo': 'cultivo',
-    'projects': 'projects'
+    'projects': 'projects',
+    'health': 'health',
+    'unstructured': 'unstructured'
   };
 
   const normalized = contextMap[contextCode?.toLowerCase()];
   if (!normalized) {
     console.error(`\n❌ Invalid context code: ${contextCode}`);
-    console.error(`   Valid codes: per, soc, prof, cul, proj\n`);
+    console.error(`   Valid codes: per, soc, prof, cul, proj, heal, us\n`);
     process.exit(1);
   }
 
@@ -479,23 +515,29 @@ function addPendingTask(description) {
   const logData = loadDailyLog();
   const timestamp = new Date().toISOString();
 
-  // Parse context - supports both --c flag and simple trailing context code
+  // Parse flags from end: check 'r' (routine) first, then context code
   let contextOverride = null;
   let cleanDesc = description;
+  let isRoutine = false;
 
-  // First try --c flag format (backward compatibility)
-  const flagMatch = description.match(/--c[=\s]+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)/i);
+  // Check for routine flag 'r' at end FIRST (before context, since "task heal r" has r last)
+  const routineMatch = cleanDesc.match(/\s+r$/i);
+  if (routineMatch) {
+    isRoutine = true;
+    cleanDesc = cleanDesc.replace(/\s+r$/i, '').trim();
+  }
+
+  // Now try --c flag format (backward compatibility)
+  const flagMatch = cleanDesc.match(/--c[=\s]+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)/i);
   if (flagMatch) {
     contextOverride = normalizeContext(flagMatch[1]);
-    // Remove the --c flag from description
-    cleanDesc = description.replace(/--c[=\s]+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)/gi, '').trim();
+    cleanDesc = cleanDesc.replace(/--c[=\s]+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)/gi, '').trim();
   } else {
     // Try simple trailing context code format: "task description cul"
-    const simpleMatch = description.match(/\s+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)$/i);
+    const simpleMatch = cleanDesc.match(/\s+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i);
     if (simpleMatch) {
       contextOverride = normalizeContext(simpleMatch[1]);
-      // Remove the context code from description
-      cleanDesc = description.replace(/\s+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)$/i, '').trim();
+      cleanDesc = cleanDesc.replace(/\s+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i, '').trim();
     }
   }
 
@@ -522,16 +564,21 @@ function addPendingTask(description) {
     timeSpent: 0
   };
 
+  if (isRoutine) {
+    entry.routine = true;
+  }
+
   logData.dailyLog.pendingTasks.push(entry);
   saveDailyLog(logData);
 
   const contextEmoji = CONTEXT_EMOJI_MAP[activityContext] || '💼';
   const priorityEmoji = priority === 'high' ? '🔴' : priority === 'low' ? '🟢' : '🟡';
-  console.log(`\n✅ Pending task added:`);
+  const routineLabel = isRoutine ? ' [R]' : '';
+  console.log(`\n✅ Pending task added${routineLabel}:`);
   console.log(`   ${contextEmoji} ${priorityEmoji} [${priority.toUpperCase()}] ${cleanDesc}\n`);
 }
 
-function addMultipleTasks(tasksArray, contextOverride) {
+function addMultipleTasks(tasksArray, contextOverride, isRoutine) {
   const logData = loadDailyLog();
   const timestamp = new Date().toISOString();
   
@@ -574,11 +621,16 @@ function addMultipleTasks(tasksArray, contextOverride) {
       timeSpent: 0
     };
 
+    if (isRoutine) {
+      entry.routine = true;
+    }
+
     logData.dailyLog.pendingTasks.push(entry);
-    
+
     const contextEmoji = CONTEXT_EMOJI_MAP[activityContext] || '💼';
     const priorityEmoji = priority === 'high' ? '🔴' : priority === 'low' ? '🟢' : '🟡';
-    added.push(`${contextEmoji} ${priorityEmoji} ${finalDesc}`);
+    const routineLabel = isRoutine ? ' [R]' : '';
+    added.push(`${contextEmoji} ${priorityEmoji} ${finalDesc}${routineLabel}`);
   }
 
   saveDailyLog(logData);
@@ -593,21 +645,29 @@ function addPendingTaskAndSwitch(description) {
   const logData = loadDailyLog();
   const timestamp = new Date().toISOString();
 
-  // Parse context - supports both --c flag and simple trailing context code
+  // Parse flags from end: check 'r' (routine) first, then context code
   let contextOverride = null;
   let cleanDesc = description;
+  let isRoutine = false;
 
-  // First try --c flag format (backward compatibility)
-  const flagMatch = description.match(/--c[=\s]+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)/i);
+  // Check for routine flag 'r' at end FIRST
+  const routineMatch = cleanDesc.match(/\s+r$/i);
+  if (routineMatch) {
+    isRoutine = true;
+    cleanDesc = cleanDesc.replace(/\s+r$/i, '').trim();
+  }
+
+  // Now try --c flag format (backward compatibility)
+  const flagMatch = cleanDesc.match(/--c[=\s]+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)/i);
   if (flagMatch) {
     contextOverride = normalizeContext(flagMatch[1]);
-    cleanDesc = description.replace(/--c[=\s]+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)/gi, '').trim();
+    cleanDesc = cleanDesc.replace(/--c[=\s]+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)/gi, '').trim();
   } else {
     // Try simple trailing context code format: "task description cul"
-    const simpleMatch = description.match(/\s+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)$/i);
+    const simpleMatch = cleanDesc.match(/\s+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i);
     if (simpleMatch) {
       contextOverride = normalizeContext(simpleMatch[1]);
-      cleanDesc = description.replace(/\s+(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)$/i, '').trim();
+      cleanDesc = cleanDesc.replace(/\s+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i, '').trim();
     }
   }
 
@@ -641,6 +701,11 @@ function addPendingTaskAndSwitch(description) {
       notes: prevTask.notes || []
     };
 
+    // Preserve routine flag from current task
+    if (prevTask.routine) {
+      pendingEntry.routine = true;
+    }
+
     logData.dailyLog.pendingTasks.push(pendingEntry);
 
     const contextEmojiMap = CONTEXT_EMOJI_MAP;
@@ -657,7 +722,8 @@ function addPendingTaskAndSwitch(description) {
     activityContext: activityContext,
     timeSpent: 0,
     notes: [],
-    isContextOnly: false  // Real task, not just context tracking
+    isContextOnly: false,  // Real task, not just context tracking
+    routine: isRoutine
   };
 
   saveDailyLog(logData);
@@ -669,17 +735,26 @@ function addPendingTaskAndSwitch(description) {
 }
 
 // Helper function to get tasks in display order
-function getDisplayOrderedTasks(allTasks, contextFilter) {
+function getDisplayOrderedTasks(allTasks, contextFilter, viewMode) {
+  // First filter by view mode (routine vs novel)
+  let filtered = allTasks;
+  if (viewMode === 'routine') {
+    filtered = allTasks.filter(t => t.routine === true);
+  } else if (viewMode === 'novel') {
+    filtered = allTasks.filter(t => !t.routine);
+  }
+  // If viewMode is null/undefined, show all (backward compat)
+
   if (contextFilter) {
     // Filtered mode: only return tasks matching the filter
-    return allTasks.filter(t => (t.activityContext || 'professional') === contextFilter);
+    return filtered.filter(t => (t.activityContext || 'professional') === contextFilter);
   } else {
     // No filter: return tasks ordered by context groups
-    const contextOrder = ['personal', 'cultivo', 'professional', 'social', 'projects'];
+    const contextOrder = ['personal', 'health', 'cultivo', 'professional', 'social', 'projects', 'unstructured'];
     const displayOrderTasks = [];
 
     contextOrder.forEach(ctx => {
-      const contextTasks = allTasks.filter(task => (task.activityContext || 'professional') === ctx);
+      const contextTasks = filtered.filter(task => (task.activityContext || 'professional') === ctx);
       displayOrderTasks.push(...contextTasks);
     });
 
@@ -693,7 +768,8 @@ function switchToTask(taskNumber) {
 
   // Get context filter and get tasks in display order
   const contextFilter = logData.dailyLog.contextFilter || null;
-  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter);
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter, viewMode);
 
   const taskIndex = taskNumber - 1;
 
@@ -744,6 +820,11 @@ function switchToTask(taskNumber) {
         notes: prevTask.notes || []  // Preserve notes when switching tasks
       };
 
+      // Preserve routine flag
+      if (prevTask.routine) {
+        pendingEntry.routine = true;
+      }
+
       logData.dailyLog.pendingTasks.push(pendingEntry);
 
       const contextEmojiMap = CONTEXT_EMOJI_MAP;
@@ -766,7 +847,8 @@ function switchToTask(taskNumber) {
     activityContext: activityContext,
     timeSpent: pendingTask.timeSpent || 0,
     notes: pendingTask.notes || [],  // Preserve notes from pending task
-    isContextOnly: false  // Real task, not just context tracking
+    isContextOnly: false,  // Real task, not just context tracking
+    routine: pendingTask.routine || false
   };
 
   // Set context filter to match the task's context
@@ -798,7 +880,8 @@ function completeTaskByNumber(taskNumber) {
 
   // Get context filter and get tasks in display order
   const contextFilter = logData.dailyLog.contextFilter || null;
-  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter);
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter, viewMode);
 
   const taskIndex = taskNumber - 1;
 
@@ -808,6 +891,13 @@ function completeTaskByNumber(taskNumber) {
   }
 
   const taskToComplete = pendingTasks[taskIndex];
+
+  if (taskToComplete.routine) {
+    console.error(`\n❌ Cannot complete routine task "${taskToComplete.title}". Routine tasks persist across days.`);
+    console.error(`   Use /t d-${taskNumber} to delete it instead.\n`);
+    process.exit(1);
+  }
+
   const actualIndex = logData.dailyLog.pendingTasks.indexOf(taskToComplete);
 
   const taskTitle = taskToComplete.title || taskToComplete.task;
@@ -860,7 +950,8 @@ function completeBulkTasks(taskNumbersStr) {
   const logData = loadDailyLog();
   const timestamp = new Date().toISOString();
   const contextFilter = logData.dailyLog.contextFilter || null;
-  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter);
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter, viewMode);
 
   const completed = [];
   const errors = [];
@@ -908,6 +999,13 @@ function completeBulkTasks(taskNumbersStr) {
     }
 
     const taskToComplete = pendingTasks[taskIndex];
+
+    // Skip routine tasks - they cannot be completed
+    if (taskToComplete.routine) {
+      errors.push(`#${taskNumber} "${taskToComplete.title}" (routine task - cannot complete)`);
+      continue;
+    }
+
     const actualIndex = logData.dailyLog.pendingTasks.indexOf(taskToComplete);
 
     const taskTitle = taskToComplete.title || taskToComplete.task;
@@ -1064,6 +1162,11 @@ function pauseCurrentTask(customEndTime = null, addNote = null) {
     notes: notes
   };
 
+  // Preserve routine flag
+  if (currentTask.routine) {
+    pendingEntry.routine = true;
+  }
+
   logData.dailyLog.pendingTasks.push(pendingEntry);
   logData.dailyLog.currentTask = null;
 
@@ -1182,7 +1285,8 @@ function deleteTask(taskNumber) {
 
   // Get context filter and get tasks in display order
   const contextFilter = logData.dailyLog.contextFilter || null;
-  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter);
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter, viewMode);
 
   const taskIndex = taskNumber - 1;
 
@@ -1223,7 +1327,8 @@ function deleteBulkTasks(taskNumbersStr) {
 
   const logData = loadDailyLog();
   const contextFilter = logData.dailyLog.contextFilter || null;
-  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter);
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter, viewMode);
 
   const deleted = [];
   const errors = [];
@@ -1272,6 +1377,24 @@ function deleteBulkTasks(taskNumbersStr) {
   console.log('');
 }
 
+function toggleViewMode() {
+  const logData = loadDailyLog();
+  const currentMode = logData.dailyLog.viewMode || 'novel';
+  const newMode = currentMode === 'novel' ? 'routine' : 'novel';
+  logData.dailyLog.viewMode = newMode;
+  saveDailyLog(logData);
+
+  const modeEmoji = newMode === 'routine' ? '🔄' : '✨';
+  const contextFilter = logData.dailyLog.contextFilter || null;
+  const filteredTasks = getDisplayOrderedTasks(
+    logData.dailyLog.pendingTasks,
+    contextFilter,
+    newMode
+  );
+  const filterStr = contextFilter ? ` (${contextFilter})` : '';
+  console.log(`\n${modeEmoji} View mode: ${newMode.toUpperCase()}${filterStr} (${filteredTasks.length} tasks)\n`);
+}
+
 function modifyTaskContext(taskNumber, newContextCode) {
   // Normalize the context code
   const newContext = normalizeContext(newContextCode);
@@ -1305,7 +1428,8 @@ function modifyTaskContext(taskNumber, newContextCode) {
   const logData = loadDailyLog();
   const contextFilter = logData.dailyLog.contextFilter || null;
   const allPendingTasks = logData.dailyLog.pendingTasks || [];
-  const displayTasks = getDisplayOrderedTasks(allPendingTasks, contextFilter);
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const displayTasks = getDisplayOrderedTasks(allPendingTasks, contextFilter, viewMode);
 
   if (taskNumber < 1 || taskNumber > displayTasks.length) {
     console.error(`\n❌ Invalid task number: ${taskNumber}\n`);
@@ -1471,14 +1595,14 @@ function showDailyLog(date = TODAY) {
 
   // Pending Tasks
   const contextFilter = log.contextFilter || null;
-  const filteredTasks = contextFilter
-    ? log.pendingTasks.filter(task => (task.activityContext || 'professional') === contextFilter)
-    : log.pendingTasks;
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const filteredTasks = getDisplayOrderedTasks(log.pendingTasks, contextFilter, viewMode);
 
   console.log('\n📋 PENDING TASKS:');
   if (contextFilter) {
     const contextEmoji = CONTEXT_EMOJI_MAP[contextFilter] || '💼';
-    console.log(`   ${contextEmoji} Filtered by: ${contextFilter.toUpperCase()} (${filteredTasks.length}/${log.pendingTasks.length} tasks)`);
+    const totalTasksInContext = log.pendingTasks.filter(task => (task.activityContext || 'professional') === contextFilter).length;
+    console.log(`   ${contextEmoji} Filtered by: ${contextFilter.toUpperCase()} (${filteredTasks.length}/${totalTasksInContext} tasks - view mode: ${viewMode})`);
   }
 
   if (filteredTasks.length === 0) {
@@ -1506,12 +1630,11 @@ function showDailyLog(date = TODAY) {
       });
     } else {
       // No filter: group tasks by context with emoji separators
-      const displayOrderTasks = getDisplayOrderedTasks(log.pendingTasks, null);
-
+      // filteredTasks already has viewMode applied, just use it directly
       let taskNum = 1;
       let currentContext = null;
 
-      displayOrderTasks.forEach(task => {
+      filteredTasks.forEach(task => {
         const taskContext = task.activityContext || 'professional';
 
         // Print emoji separator when context changes
@@ -1588,14 +1711,29 @@ function startNewDay() {
       const result = timeTracker.archiveDayTime(lastAvailableDay);
       if (result) {
         console.log(`\n📊 Time archived for ${lastAvailableDay}:`);
-        const { cultivo, personal, professional, projects, social } = result.contextTimes;
-        const total = cultivo + personal + professional + projects + social;
-        if (total > 0) {
-          if (cultivo > 0) console.log(`   🌱 Cultivo: ${formatTimeSpent(cultivo)}`);
-          if (personal > 0) console.log(`   🏠 Personal: ${formatTimeSpent(personal)}`);
-          if (professional > 0) console.log(`   💼 Professional: ${formatTimeSpent(professional)}`);
-          if (projects > 0) console.log(`   🚀 Projects: ${formatTimeSpent(projects)}`);
-          if (social > 0) console.log(`   👥 Social: ${formatTimeSpent(social)}`);
+        const ct = result.contextTimes;
+        const contextDisplay = [
+          { key: 'cultivo', emoji: '🌱', name: 'Cultivo' },
+          { key: 'personal', emoji: '🏠', name: 'Personal' },
+          { key: 'health', emoji: '💪', name: 'Health' },
+          { key: 'professional', emoji: '💼', name: 'Professional' },
+          { key: 'projects', emoji: '🚀', name: 'Projects' },
+          { key: 'social', emoji: '👥', name: 'Social' },
+          { key: 'unstructured', emoji: '☀️', name: 'Unstructured' }
+        ];
+        contextDisplay.forEach(({ key, emoji, name }) => {
+          if (ct[key] > 0) console.log(`   ${emoji} ${name}: ${formatTimeSpent(ct[key])}`);
+        });
+
+        // Show time budget update
+        if (result.budgetDelta) {
+          const bd = result.budgetDelta;
+          const balance = timeTracker.getTimeBudgetBalance();
+          console.log(`\n💰 Time Budget:`);
+          console.log(`   Earned: +${formatTimeSpent(Math.round(bd.earned))}`);
+          console.log(`   Spent:  -${formatTimeSpent(Math.round(bd.spent))}`);
+          const balSign = balance.balance >= 0 ? '+' : '-';
+          console.log(`   Balance: ${balSign}${formatTimeSpent(Math.round(Math.abs(balance.balance)))}`);
         }
       }
     } catch (error) {
@@ -1765,19 +1903,19 @@ function addNoteToCompletedWork(workId, noteText) {
 function pullJiraTickets() {
   const { execSync } = require('child_process');
 
-  console.log('\n🔄 Fetching assigned Jira tickets from Cultivo...\n');
+  console.log('\n🔄 Syncing with Jira tickets...\n');
 
   try {
     // Fetch tickets from Jira API
     const jiraEmail = process.env.ATLASSIAN_EMAIL;
     const jiraToken = process.env.ATLASSIAN_API_TOKEN;
     const jiraDomain = process.env.ATLASSIAN_DOMAIN || 'cultivo.atlassian.net';
-    
+
     if (!jiraEmail || !jiraToken) {
       console.error('❌ Error: ATLASSIAN_EMAIL and ATLASSIAN_API_TOKEN must be set in .env file');
       return;
     }
-    
+
     const jiraCredentials = `${jiraEmail}:${jiraToken}`;
     const jiraUrl = `https://${jiraDomain}/rest/api/3/search/jql`;
 
@@ -1799,6 +1937,13 @@ function pullJiraTickets() {
 
     const logData = loadDailyLog();
     let addedCount = 0;
+    let removedCount = 0;
+
+    // Create a map of all Jira tickets by key and their status
+    const jiraTicketMap = new Map();
+    for (const issue of data.issues) {
+      jiraTicketMap.set(issue.key, issue.fields.status.name);
+    }
 
     // Get existing Jira ticket numbers from pending tasks to avoid duplicates
     const existingJiraTickets = new Set(
@@ -1807,10 +1952,36 @@ function pullJiraTickets() {
         .map(t => t.jiraTicket)
     );
 
-    console.log(`📋 Found ${data.issues.length} active ticket(s):\n`);
+    console.log(`📋 Found ${data.issues.length} ticket(s) assigned to you:\n`);
 
     // Statuses that should not be added to pending tasks
     const excludedStatuses = ['Done', 'Deployed', "Won't Do", 'Closed'];
+
+    // Remove tasks that are now done in Jira (two-way sync)
+    console.log('🧹 Removing completed tickets from pending tasks:\n');
+    const initialLength = logData.dailyLog.pendingTasks.length;
+
+    logData.dailyLog.pendingTasks = logData.dailyLog.pendingTasks.filter(task => {
+      if (task && task.jiraTicket && jiraTicketMap.has(task.jiraTicket)) {
+        const jiraStatus = jiraTicketMap.get(task.jiraTicket);
+        if (excludedStatuses.includes(jiraStatus)) {
+          removedCount++;
+          const statusEmoji = jiraStatus === 'Done' ? '✅' : jiraStatus === 'Deployed' ? '🚀' : '⏭️';
+          console.log(`   ${statusEmoji} ${task.jiraTicket}: ${task.title.replace(/^\[.*?\]\s/, '')} (${jiraStatus})`);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (removedCount === 0) {
+      console.log('   (no completed tickets to remove)\n');
+    } else {
+      console.log('');
+    }
+
+    // Add new active tickets (one-way from Jira)
+    console.log('➕ Adding new active tickets to pending tasks:\n');
 
     for (const issue of data.issues) {
       const ticketKey = issue.key;
@@ -1821,7 +1992,8 @@ function pullJiraTickets() {
 
       // Skip excluded statuses
       if (excludedStatuses.includes(status)) {
-        console.log(`   ⏭️  ${ticketKey}: ${summary} (${status})`);
+        const statusEmoji = status === 'Done' ? '✅' : status === 'Deployed' ? '🚀' : '⏭️';
+        console.log(`   ${statusEmoji} ${ticketKey}: ${summary} (${status})`);
         continue;
       }
 
@@ -1858,18 +2030,180 @@ function pullJiraTickets() {
       console.log(`      Status: ${status} | Priority: ${priority}`);
     }
 
+    if (addedCount === 0) {
+      console.log('   (no new tickets to add)\n');
+    } else {
+      console.log('');
+    }
+
     saveDailyLog(logData);
 
-    console.log(`\n✅ Added ${addedCount} ticket(s) to pending tasks.`);
+    console.log(`📊 Sync complete:`);
+    console.log(`   ✅ Removed ${removedCount} completed ticket(s)`);
+    console.log(`   ➕ Added ${addedCount} new ticket(s)`);
+    console.log(`   📋 Total pending: ${logData.dailyLog.pendingTasks.length}\n`);
 
-    if (addedCount > 0) {
-      console.log(`\n💡 Use /t -N to switch to a task, or /t show to see all tasks.\n`);
-    } else {
-      console.log(`\n💡 All tickets are already in your pending tasks.\n`);
+    if (addedCount > 0 || removedCount > 0) {
+      console.log(`💡 Use /t -N to switch to a task, or /t show to see all tasks.\n`);
     }
 
   } catch (error) {
-    console.error(`\n❌ Error fetching Jira tickets: ${error.message}\n`);
+    console.error(`\n❌ Error syncing Jira tickets: ${error.message}\n`);
+    process.exit(1);
+  }
+}
+
+function mapGoogleListToContext(listName) {
+  const lower = (listName || '').toLowerCase();
+  const listContextMap = {
+    'health': 'health',
+    'personal': 'personal',
+    'cultivo': 'cultivo',
+    'projects': 'projects',
+    'social': 'social',
+    'society': 'social',
+    'professional': 'professional',
+    'edu': 'projects'
+  };
+  return listContextMap[lower] || null;
+}
+
+function pullGoogleTasks() {
+  const { execSync } = require('child_process');
+
+  console.log('\n🔄 Pulling Google Tasks due today...\n');
+
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+
+    if (!clientId || !clientSecret || !refreshToken) {
+      console.error('❌ Error: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN must be set in .env file');
+      return;
+    }
+
+    // Step 1: Exchange refresh token for access token
+    const tokenResponse = execSync(
+      `curl -s -X POST https://oauth2.googleapis.com/token ` +
+      `-d client_id="${clientId}" ` +
+      `-d client_secret="${clientSecret}" ` +
+      `-d refresh_token="${refreshToken}" ` +
+      `-d grant_type=refresh_token`,
+      { encoding: 'utf8' }
+    );
+    const tokenData = JSON.parse(tokenResponse);
+
+    if (!tokenData.access_token) {
+      console.error('❌ Failed to get access token from Google OAuth');
+      if (tokenData.error) console.error(`   Error: ${tokenData.error} - ${tokenData.error_description}`);
+      return;
+    }
+
+    const accessToken = tokenData.access_token;
+
+    // Step 2: List all task lists
+    const listsResponse = execSync(
+      `curl -s -H "Authorization: Bearer ${accessToken}" ` +
+      `"https://www.googleapis.com/tasks/v1/users/@me/lists"`,
+      { encoding: 'utf8' }
+    );
+    const listsData = JSON.parse(listsResponse);
+
+    if (!listsData.items || listsData.items.length === 0) {
+      console.log('✅ No task lists found.\n');
+      return;
+    }
+
+    // Step 3: Calculate today's date range in RFC 3339
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const dueMin = today.toISOString();
+    const dueMax = tomorrow.toISOString();
+
+    const logData = loadDailyLog();
+    let addedCount = 0;
+    let skippedCount = 0;
+
+    // Get existing Google Task IDs to avoid duplicates
+    const existingGoogleTaskIds = new Set(
+      logData.dailyLog.pendingTasks
+        .filter(t => t && t.googleTaskId)
+        .map(t => t.googleTaskId)
+    );
+
+    console.log(`📋 Checking ${listsData.items.length} task list(s) for tasks due today:\n`);
+
+    for (const list of listsData.items) {
+      // Step 4: Fetch tasks due today from each list
+      const tasksResponse = execSync(
+        `curl -s -H "Authorization: Bearer ${accessToken}" ` +
+        `"https://www.googleapis.com/tasks/v1/lists/${list.id}/tasks?dueMin=${encodeURIComponent(dueMin)}&dueMax=${encodeURIComponent(dueMax)}&showCompleted=false&showHidden=false"`,
+        { encoding: 'utf8' }
+      );
+      const tasksData = JSON.parse(tasksResponse);
+
+      if (!tasksData.items || tasksData.items.length === 0) {
+        continue;
+      }
+
+      const listEmoji = CONTEXT_EMOJI_MAP[mapGoogleListToContext(list.title)] || '📝';
+      console.log(`${listEmoji} ${list.title}:`);
+
+      for (const task of tasksData.items) {
+        // Skip completed tasks
+        if (task.status === 'completed') continue;
+
+        // Deduplicate
+        if (existingGoogleTaskIds.has(task.id)) {
+          console.log(`   ⏭️  ${task.title} (already in pending)`);
+          skippedCount++;
+          continue;
+        }
+
+        // Map list name to context
+        let context = mapGoogleListToContext(list.title);
+        if (!context) {
+          context = detectContext(task.title || '');
+        }
+
+        const newTask = {
+          id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+          title: task.title,
+          activityContext: context,
+          category: 'General',
+          priority: 'medium',
+          timeSpent: 0,
+          googleTaskId: task.id,
+          googleTaskListId: list.id,
+          googleTaskListName: list.title,
+          notes: task.notes ? [task.notes] : []
+        };
+
+        logData.dailyLog.pendingTasks.push(newTask);
+        existingGoogleTaskIds.add(task.id);
+        addedCount++;
+
+        const contextEmoji = CONTEXT_EMOJI_MAP[context] || '📝';
+        console.log(`   ➕ ${task.title} (${contextEmoji} ${context})`);
+      }
+    }
+
+    saveDailyLog(logData);
+
+    console.log(`\n📊 Google Tasks sync complete:`);
+    console.log(`   ➕ Added ${addedCount} task(s)`);
+    console.log(`   ⏭️  Skipped ${skippedCount} duplicate(s)`);
+    console.log(`   📋 Total pending: ${logData.dailyLog.pendingTasks.length}\n`);
+
+    if (addedCount > 0) {
+      console.log(`💡 Use /t -N to switch to a task, or /t show to see all tasks.\n`);
+    }
+
+  } catch (error) {
+    console.error(`\n❌ Error pulling Google Tasks: ${error.message}\n`);
     process.exit(1);
   }
 }
@@ -1976,7 +2310,7 @@ try {
     if (args.length < 1) {
       console.error('\n❌ Missing context argument\n');
       console.error('   Usage: m-N <context>\n');
-      console.error('   Valid contexts: per, soc, prof, cul, proj\n');
+      console.error('   Valid contexts: per, soc, prof, cul, proj, heal, us\n');
       process.exit(1);
     }
     modifyTaskContext(taskNumber, args[0]);
@@ -2041,25 +2375,36 @@ try {
         process.exit(1);
       }
       
-      // Check if the last argument is a context code
+      // Parse trailing flags: [context] [r]
+      // Order: check for 'r' (routine) first since it's always last, then context
       let contextArg = null;
-      let taskArgs = args;
-      
-      const lastArg = args[args.length - 1];
-      const contextMatch = lastArg.match(/^(per|soc|prof|cul|proj|personal|social|professional|cultivo|projects)$/i);
-      if (contextMatch) {
-        contextArg = contextMatch[1];
-        taskArgs = args.slice(0, -1);
+      let taskArgs = [...args];
+      let isRoutineAdd = false;
+
+      // Check if last arg is 'r' for routine
+      if (taskArgs.length > 0 && taskArgs[taskArgs.length - 1].toLowerCase() === 'r') {
+        isRoutineAdd = true;
+        taskArgs = taskArgs.slice(0, -1);
       }
-      
+
+      // Check if (new) last arg is a context code
+      if (taskArgs.length > 0) {
+        const lastArg = taskArgs[taskArgs.length - 1];
+        const contextMatch = lastArg.match(/^(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i);
+        if (contextMatch) {
+          contextArg = contextMatch[1];
+          taskArgs = taskArgs.slice(0, -1);
+        }
+      }
+
       if (taskArgs.length === 0) {
         console.error('\n❌ No tasks provided.\n');
         console.error('   Example: add "Buy groceries" "Call dentist" per\n');
         process.exit(1);
       }
-      
+
       // Each argument is a task (shell already parsed quotes for us)
-      addMultipleTasks(taskArgs, contextArg);
+      addMultipleTasks(taskArgs, contextArg, isRoutineAdd);
       break;
 
     case 'add-switch':
@@ -2147,7 +2492,7 @@ try {
     case 'modify-context':
       if (args.length < 2 || isNaN(args[0])) {
         console.error('\n❌ Usage: modify-context <task-number> <context>\n');
-        console.error('   Valid contexts: per, soc, prof, cul, proj\n');
+        console.error('   Valid contexts: per, soc, prof, cul, proj, heal, us\n');
         console.error('   Example: modify-context 0 cul (modify current task)\n');
         console.error('   Example: modify-context 2 per (modify pending task #2)\n');
         process.exit(1);
@@ -2155,8 +2500,13 @@ try {
       modifyTaskContext(parseInt(args[0]), args[1]);
       break;
 
+    case 'pull-jira':
     case 'jira':
       pullJiraTickets();
+      break;
+
+    case 'pull-goog':
+      pullGoogleTasks();
       break;
 
     case 'help':
@@ -2176,7 +2526,15 @@ try {
     case 'cultivo':
     case 'proj':
     case 'projects':
+    case 'heal':
+    case 'health':
+    case 'us':
+    case 'unstructured':
       switchToContext(command);
+      break;
+
+    case 'r':
+      toggleViewMode();
       break;
 
     case 'all':

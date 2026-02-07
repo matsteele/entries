@@ -9,18 +9,11 @@
 
 ## Three Core Activities
 
-This application supports three interconnected workflows:
+1. **📋 Daily Task Tracking** — `/t` commands, terminal statusline, time budget
+2. **📝 Logging & Journaling** — PostgreSQL + pgvector for narrative content
+3. **🎯 Planning & Backlog** — Google Tasks + Calendar (plan-driven)
 
-1. **📋 Daily Task Tracking** - Tasks for today (terminal/daily log, `/t` commands)
-2. **📝 Logging & Journaling** - Life data capture (Supabase, vector embeddings, semantic search)
-3. **🎯 Planning & Backlog** - Future work (Google Tasks + Calendar, plan-driven)
-
-**Critical Flow:**
-```
-Plans → Tasks → Google Tasks (backlog) 
-  → User favorites → /t pull → Daily Log 
-    → Google Calendar (time blocking)
-```
+See **[CLAUDE.md](./CLAUDE.md)** for workflow details. See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for system architecture and database schema.
 
 ### Why This Matters
 
@@ -37,8 +30,8 @@ Any changes to CLI commands, aliases, behaviors, or data structures **MUST be sy
 ┌─────────────────────────────────────────────────────────┐
 │  Claude AI Assistant                                    │
 │  ├─ CLAUDE.md instructions (slash commands)            │
-│  ├─ This file (AGENT.md - architectural guidance)      │
-│  ├─ MCP tools for Google Tasks, Supabase, etc.         │
+│  ├─ AGENTS.md (sync guidance)                          │
+│  ├─ MCP tools for Google Tasks, etc.                   │
 │  └─ npm run scripts awareness                          │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -64,13 +57,18 @@ Any changes to CLI commands, aliases, behaviors, or data structures **MUST be sy
 
 ### 2. Changing Context System
 
-**Example: Modifying context tags (per, cul, prof, soc, proj)**
+**Example: Modifying context tags (per, cul, prof, soc, proj, heal, us)**
+
+For the full list of contexts, codes, emojis, and budget roles, see **[ARCHITECTURE.md](./ARCHITECTURE.md#contexts)**.
 
 **✅ UPDATE ALL:**
-- `daily-log-cli.js` - Context detection logic
-- `.zshrc` - Context filter commands (`/t per`, `/t cul`, etc.)
-- `CLAUDE.md` - Context auto-detection section (lines 262-278)
-- `CLAUDE.md` - Context tags section (lines 299-307)
+- `daily-log-cli.js` - Context detection logic, `normalizeContext()`, regex patterns
+- `statusline.js` - `CONTEXT_EMOJI`, `CONTEXT_COLORS`, `contextOrder`
+- `prompt.js` - `CONTEXT_NAMES`, `CONTEXT_COLORS`
+- `time-tracker.js` - All context initialization objects
+- `.zshrc` - Context filter commands in `/t` function
+- `CLAUDE.md` - Context tags section
+- `tracking/SESSION_ACTIVITY_TRACKING.md` - Context values, auto-detection keywords
 
 ### 3. Modifying NPM Scripts
 
@@ -87,22 +85,25 @@ Any changes to CLI commands, aliases, behaviors, or data structures **MUST be sy
 
 **✅ UPDATE:**
 - Backend code (daily-log-cli.js, etc.)
-- Supabase schema if needed
-- `CLAUDE.md` - Data Location table (lines 23-32)
-- `CLAUDE.md` - Entry Formats section (lines 81-156)
+- Local JSON file structures if needed
+- `CLAUDE.md` - Data Location section
+- `LOCAL_DATABASE.md` - Storage documentation
 
 ---
 
-## Key Files to Synchronize
+## Key Files to Synchronize to ZSH commands
 
 | File | Purpose | What to Sync |
 |------|---------|--------------|
 | `~/.zshrc` | Shell aliases & functions | Command syntax, available options, file paths |
-| `CLAUDE.md` | Claude's primary instructions | Command documentation, workflows, formats |
-| `AGENT.md` | This file - meta guidance | Architectural patterns, sync requirements |
+| `AGENTS.md` | This file - sync guidance | Architectural patterns, sync requirements |
+| `ARCHITECTURE.md` | System architecture | Schema, contexts, command reference table |
+| `tracking/SESSION_ACTIVITY_TRACKING.md` | Command details | Full `/t` docs, routine/novel, time budget, auto-detection |
 | `app/backend/package.json` | NPM scripts | Script names, parameters, what they do |
 | `app/backend/daily-log-cli.js` | CLI implementation | Actual command behavior |
 | `app/backend/statusline.js` | Status display | What info is shown in terminal |
+| `app/backend/prompt.js` | ZSH prompt | Current task in prompt line |
+| `app/backend/time-tracker.js` | Time tracking | Context time, budget calculations |
 | `.mcp.json` | MCP server configuration | Available tools and their descriptions |
 
 ---
@@ -133,6 +134,23 @@ Issue: No such script exists, Claude hallucinated based on pattern
 
 **Prevention:** Verify all npm commands exist in `package.json` before documenting.
 
+### ❌ Pitfall 4: Wrong Database Name
+```
+Claude: "psql -U matthewsteele -d entries_db"
+Issue: Database is named "entries", NOT "entries_db". Connecting to wrong db creates empty tables.
+```
+
+**Prevention:** The database name is **`entries`**. Always use `psql -U matthewsteele -d entries`. See the Database Connection section below.
+
+---
+
+## Database Connection
+
+> **⚠️ CRITICAL: The database name is `entries` — NOT `entries_db`, NOT `postgres`.**
+> Connect with: `psql -U matthewsteele -d entries`
+
+For full connection details, schema, and semantic search, see **[ARCHITECTURE.md](./ARCHITECTURE.md#database-connection)**.
+
 ---
 
 ## Testing Checklist
@@ -152,84 +170,39 @@ Before considering any CLI/command change complete:
 
 ```
 entries/
-├── AGENT.md                          ← This file (architectural guidance)
+├── AGENTS.md                         ← This file (sync guidance)
 ├── CLAUDE.md                         ← Claude's primary instructions
+├── ARCHITECTURE.md                   ← System architecture, schema, command reference
+├── tracking/
+│   └── SESSION_ACTIVITY_TRACKING.md  ← Full command details, routine/novel, time budget
 ├── .mcp.json                         ← MCP server config
 ├── .claude/
 │   └── settings.local.json          ← Claude Code MCP tools
 ├── app/backend/
 │   ├── daily-log-cli.js             ← Main CLI implementation
 │   ├── statusline.js                ← Terminal status display
-│   ├── time-tracker.js              ← Time tracking logic
+│   ├── prompt.js                    ← ZSH prompt integration
+│   ├── time-tracker.js              ← Time tracking + time budget logic
 │   └── package.json                 ← NPM scripts
 └── ~/.zshrc                         ← User's shell config (EXTERNAL)
 ```
 
 ---
 
-## Development Workflow
 
-### For Adding New Features
-
-1. **Design**: Plan the feature considering both environments
-2. **Implement**: Code the functionality in backend files
-3. **Expose in Shell**: Add/update `.zshrc` aliases or functions
-4. **Expose in NPM**: Add scripts to `package.json` if needed
-5. **Document for Claude**: Update `CLAUDE.md` with syntax and behavior
-6. **Document for Agents**: Update this file if it affects architecture
-7. **Test Both**: Verify in terminal AND with Claude
-8. **Commit Together**: All changes in one logical unit
-
-### For Debugging Issues
-
-1. **Check Sync**: Compare `.zshrc`, `CLAUDE.md`, and actual code
-2. **Verify Files**: Ensure file paths in `.zshrc` are correct
-3. **Test Isolation**: Try command in terminal first, then via Claude
-4. **Check Docs**: Look for outdated documentation causing confusion
-
----
-
-## Why This Document Exists
-
-This project is **unique** in that it serves as both:
-- A **traditional CLI application** (used directly by the user in terminal)
-- An **AI-mediated application** (used by Claude on behalf of the user)
-
-Most applications are one or the other. This dual nature means:
-- **The user** needs ZSH aliases for fast terminal access
-- **Claude** needs clear documentation to understand available commands
-- **Both** must agree on syntax, behavior, and available features
-
-**When these environments drift apart, the user experience degrades.**
-
-This file exists to prevent that drift and ensure smooth collaboration between:
-- User ↔ Terminal (via `.zshrc`)
-- User ↔ Claude (via `CLAUDE.md`)
-- Claude ↔ Application (via code understanding and MCP)
-
----
 
 ## Quick Reference: Where to Update What
 
 | Change Type | Files to Update |
 |------------|-----------------|
-| New `/t` command | `.zshrc`, `daily-log-cli.js`, `CLAUDE.md` |
-| New context | `daily-log-cli.js`, `.zshrc`, `CLAUDE.md` (2 sections) |
-| New npm script | `package.json`, `CLAUDE.md` |
-| New journal type | Backend code, Supabase, `CLAUDE.md` (2 sections) |
+| New `/t` command | `.zshrc`, `daily-log-cli.js`, `SESSION_ACTIVITY_TRACKING.md`, `ARCHITECTURE.md` command table |
+| New context | `daily-log-cli.js`, `statusline.js`, `prompt.js`, `time-tracker.js`, `.zshrc`, `ARCHITECTURE.md`, `SESSION_ACTIVITY_TRACKING.md`, `CLAUDE.md` |
+| New npm script | `package.json`, `SESSION_ACTIVITY_TRACKING.md` |
+| New journal type | Backend code, `CLAUDE.md` journal types table, `ARCHITECTURE.md` |
 | New MCP tool | `.mcp.json` or `.claude/settings.local.json`, `CLAUDE.md` if user-facing |
-| Command syntax change | `.zshrc`, `CLAUDE.md`, test extensively |
-| Context detection logic | `daily-log-cli.js`, `CLAUDE.md` auto-detection section |
-| Task workflow change | `daily-log-cli.js`, `.zshrc`, `CLAUDE.md`, possibly Google Tasks integration |
-
-### Current TODOs
-
-**Pending Implementation:**
-- `/t pull` - Command to pull favorited Google Tasks into daily log
-- Google Calendar sync - Sync daily tasks with calendar for time blocking
-- Complete Google Tasks → Daily Log → Calendar workflow
-
-When implementing these, remember to update **all three** environments!
+| Command syntax change | `.zshrc`, `SESSION_ACTIVITY_TRACKING.md`, `ARCHITECTURE.md`, test extensively |
+| Context detection logic | `daily-log-cli.js`, `SESSION_ACTIVITY_TRACKING.md` auto-detection section |
+| Task workflow change | `daily-log-cli.js`, `.zshrc`, `SESSION_ACTIVITY_TRACKING.md`, possibly Google Tasks integration |
 
 ---
 
@@ -240,7 +213,7 @@ When you (Claude or another agent) are asked to modify this application:
 1. **Always consider both environments** - terminal and AI assistant
 2. **Always update documentation alongside code** - not as an afterthought
 3. **Always test in both contexts** - ZSH commands AND npm scripts
-4. **Never assume** - verify file paths, script names, and command syntax
+4. **Never assume** - verify file paths, script names, and command synta
 5. **Ask if uncertain** - better to clarify than break the user's workflow
 
 **Remember:** The user relies on this application multiple times per day, every day. Consistency and reliability across both environments is critical to their productivity.

@@ -1,6 +1,6 @@
-# PROTOCOL: Stream of Consciousness Entry Ingestion
+# PROTOCOL: Digesting Entries (Stream of Consciousness Ingestion)
 
-**Purpose:** Systematically parse stream of consciousness writing into structured journal entries, plans, protocols, and decision updates.
+**Purpose:** Systematically parse stream of consciousness writing into structured database entries (journals, plans, protocols) and update structured JSON files (decisions, goals, relationships).
 
 **When to use:** After completing daily/periodic stream of consciousness writing session (aim: 2+ pages)
 

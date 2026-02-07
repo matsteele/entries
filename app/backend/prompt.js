@@ -19,7 +19,7 @@ function getLocalDate() {
 
 const TODAY = getLocalDate();
 const BASE_DIR = path.join(__dirname, '..', '..');
-const LOG_DIR = path.join(BASE_DIR, 'daily-logs');
+const LOG_DIR = path.join(BASE_DIR, 'tracking', 'daily-logs');
 const LOG_FILE = path.join(LOG_DIR, `daily-log-${TODAY}.json`);
 
 // Context name and color mapping
@@ -28,7 +28,9 @@ const CONTEXT_NAMES = {
   social: 'social',
   professional: 'professional',
   cultivo: 'cultivo',
-  projects: 'projects'
+  projects: 'projects',
+  health: 'health',
+  unstructured: 'unstructured'
 };
 
 // ANSI color codes for contexts (same as statusline)
@@ -37,7 +39,9 @@ const CONTEXT_COLORS = {
   social: '\x1b[44m',      // Blue background
   professional: '\x1b[100m', // Grey background
   cultivo: '\x1b[42m',     // Green background
-  projects: '\x1b[45m'     // Magenta background
+  projects: '\x1b[45m',    // Magenta background
+  health: '\x1b[41m',      // Red background
+  unstructured: '\x1b[103m' // Bright yellow background
 };
 
 const RESET = '\x1b[0m';

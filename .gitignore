@@ -19,14 +19,12 @@ google_auth.json
 *.cert
 
 # Personal daily logs and time tracking
-daily-logs/
-time-logs/
+tracking/
 
 # Personal data files
 decisions.json
 goals.json
 relationships.json
-.current_day_plan.json
 
 # Journal data (contains personal reflections)
 journal/data/

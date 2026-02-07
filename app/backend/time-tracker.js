@@ -19,8 +19,8 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE_DIR = path.join(__dirname, '..', '..');
-const LOG_DIR = path.join(BASE_DIR, 'daily-logs');
-const TIME_LOG_DIR = path.join(BASE_DIR, 'time-logs');
+const LOG_DIR = path.join(BASE_DIR, 'tracking', 'daily-logs');
+const TIME_LOG_DIR = path.join(BASE_DIR, 'tracking', 'time-logs');
 const TIME_LOG_FILE = path.join(TIME_LOG_DIR, 'time-log.json');
 
 // Ensure directory exists
@@ -78,7 +78,9 @@ function calculateDailyContextTime(dailyLog) {
     social: 0,
     professional: 0,
     cultivo: 0,
-    projects: 0
+    projects: 0,
+    health: 0,
+    unstructured: 0
   };
 
   if (!dailyLog || !dailyLog.dailyLog) return contextTimes;
@@ -131,7 +133,9 @@ function addDayToWeek(date, contextTimes) {
         social: 0,
         professional: 0,
         cultivo: 0,
-        projects: 0
+        projects: 0,
+        health: 0,
+        unstructured: 0
       }
     };
   }
@@ -147,7 +151,9 @@ function addDayToWeek(date, contextTimes) {
     social: 0,
     professional: 0,
     cultivo: 0,
-    projects: 0
+    projects: 0,
+    health: 0,
+    unstructured: 0
   };
 
   Object.values(weekData.days).forEach(dayTimes => {
@@ -175,7 +181,9 @@ function getWeeklyTotal(year, week) {
     social: 0,
     professional: 0,
     cultivo: 0,
-    projects: 0
+    projects: 0,
+    health: 0,
+    unstructured: 0
   };
 }
 
@@ -188,7 +196,9 @@ function getMonthlyTotal(year, month) {
     social: 0,
     professional: 0,
     cultivo: 0,
-    projects: 0
+    projects: 0,
+    health: 0,
+    unstructured: 0
   };
 
   const timeLog = loadTimeLog();
@@ -230,7 +240,9 @@ function getYearlyTotal(year) {
     social: 0,
     professional: 0,
     cultivo: 0,
-    projects: 0
+    projects: 0,
+    health: 0,
+    unstructured: 0
   };
 
   const timeLog = loadTimeLog();
@@ -260,11 +272,15 @@ function archiveDayTime(date) {
 
   const dailyLog = JSON.parse(fs.readFileSync(logPath, 'utf8'));
   const contextTimes = calculateDailyContextTime(dailyLog);
-  
+
   // Add to time log
   const weekData = addDayToWeek(date, contextTimes);
-  
-  return { date, contextTimes, weekData };
+
+  // Calculate and update time budget
+  const budgetDelta = calculateTimeBudgetForDay(contextTimes);
+  updateTimeBudget(date, budgetDelta);
+
+  return { date, contextTimes, weekData, budgetDelta };
 }
 
 /**
@@ -287,9 +303,11 @@ function displaySummary(type, data) {
   const contexts = [
     { key: 'cultivo', emoji: '🌱', name: 'Cultivo' },
     { key: 'personal', emoji: '🏠', name: 'Personal' },
+    { key: 'health', emoji: '💪', name: 'Health' },
     { key: 'professional', emoji: '💼', name: 'Professional' },
     { key: 'projects', emoji: '🚀', name: 'Projects' },
-    { key: 'social', emoji: '👥', name: 'Social' }
+    { key: 'social', emoji: '👥', name: 'Social' },
+    { key: 'unstructured', emoji: '☀️', name: 'Unstructured' }
   ];
 
   let total = 0;
@@ -303,6 +321,95 @@ function displaySummary(type, data) {
 
   console.log('─'.repeat(50));
   console.log(`Total: ${formatTime(total)}\n`);
+}
+
+// Time Budget Constants
+const EARNING_RATE = 0.1;        // 1hr structured work = 0.1hr (6min) earned
+const EARLY_MORNING_BONUS = 0.1; // additional rate before 9am (total 0.2x)
+const EARNING_CONTEXTS = ['personal', 'social', 'professional', 'cultivo', 'projects'];
+const SPENDING_CONTEXTS = ['unstructured'];
+// health is neutral - neither earns nor spends
+
+/**
+ * Calculate time budget earned/spent for a day
+ */
+function calculateTimeBudgetForDay(contextTimes) {
+  // Calculate total structured time (in minutes)
+  let structuredMinutes = 0;
+  EARNING_CONTEXTS.forEach(ctx => {
+    structuredMinutes += (contextTimes[ctx] || 0);
+  });
+
+  // Calculate unstructured time spent (in minutes)
+  let unstructuredMinutes = 0;
+  SPENDING_CONTEXTS.forEach(ctx => {
+    unstructuredMinutes += (contextTimes[ctx] || 0);
+  });
+
+  // Earned = structured time * earning rate
+  const earnedMinutes = structuredMinutes * EARNING_RATE;
+  // Spent = unstructured time at 1x rate
+  const spentMinutes = unstructuredMinutes;
+
+  return {
+    earned: Math.round(earnedMinutes * 10) / 10,
+    spent: Math.round(spentMinutes * 10) / 10,
+    net: Math.round((earnedMinutes - spentMinutes) * 10) / 10
+  };
+}
+
+/**
+ * Update the persistent time budget balance
+ */
+function updateTimeBudget(date, budgetDelta) {
+  const timeLog = loadTimeLog();
+
+  if (!timeLog.timeBudget) {
+    timeLog.timeBudget = {
+      balance: 0,
+      lastUpdated: null,
+      history: []
+    };
+  }
+
+  // Idempotent: remove old entry for this date if exists
+  const existingEntry = timeLog.timeBudget.history.find(h => h.date === date);
+  if (existingEntry) {
+    timeLog.timeBudget.balance -= existingEntry.net;
+    timeLog.timeBudget.history = timeLog.timeBudget.history.filter(h => h.date !== date);
+  }
+
+  // Add new entry
+  timeLog.timeBudget.balance += budgetDelta.net;
+  timeLog.timeBudget.balance = Math.round(timeLog.timeBudget.balance * 10) / 10;
+  timeLog.timeBudget.lastUpdated = date;
+  timeLog.timeBudget.history.push({
+    date,
+    earned: budgetDelta.earned,
+    spent: budgetDelta.spent,
+    net: budgetDelta.net
+  });
+
+  // Keep only last 30 days of history
+  if (timeLog.timeBudget.history.length > 30) {
+    timeLog.timeBudget.history = timeLog.timeBudget.history.slice(-30);
+  }
+
+  saveTimeLog(timeLog);
+}
+
+/**
+ * Get the current time budget balance
+ */
+function getTimeBudgetBalance() {
+  const timeLog = loadTimeLog();
+  if (!timeLog.timeBudget) {
+    return { balance: 0, lastUpdated: null };
+  }
+  return {
+    balance: timeLog.timeBudget.balance,
+    lastUpdated: timeLog.timeBudget.lastUpdated
+  };
 }
 
 // CLI Interface
@@ -365,6 +472,8 @@ module.exports = {
   getWeeklyTotal,
   getMonthlyTotal,
   getYearlyTotal,
-  displaySummary
+  displaySummary,
+  calculateTimeBudgetForDay,
+  getTimeBudgetBalance
 };
 

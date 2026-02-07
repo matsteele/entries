@@ -9,7 +9,7 @@ const path = require('path');
 const readline = require('readline');
 
 const BASE_DIR = path.join(__dirname, '..', '..');
-const DAILY_PLAN_FILE = path.join(BASE_DIR, '.current_day_plan.json');
+const DAILY_PLAN_FILE = path.join(BASE_DIR, 'tracking', '.current_day_plan.json');
 const PLANS_FILE = path.join(BASE_DIR, 'plans', 'data', 'plans.json');
 
 // Load daily plan

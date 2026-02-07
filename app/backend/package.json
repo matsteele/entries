@@ -31,13 +31,18 @@
     "log:note": "node daily-log-cli.js note",
     "log:note-pending": "node daily-log-cli.js note-pending",
     "log:note-completed": "node daily-log-cli.js note-completed",
+    "log:modify-context": "node daily-log-cli.js modify-context",
     "log:pause-current": "node daily-log-cli.js pause-current",
     "log:p": "node daily-log-cli.js p",
     "log:p-0": "node daily-log-cli.js p-0",
     "time:week": "node time-tracker.js week",
     "time:month": "node time-tracker.js month",
     "time:year": "node time-tracker.js year",
-    "time:archive": "node time-tracker.js archive"
+    "time:archive": "node time-tracker.js archive",
+    "log:pull-jira": "node daily-log-cli.js pull-jira",
+    "log:pull-goog": "node daily-log-cli.js pull-goog",
+    "search": "node search-cli.js",
+    "embeddings:backfill": "node embeddings.js"
   },
   "keywords": [
     "planning",
@@ -48,8 +53,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.90.0",
     "cors": "^2.8.5",
     "express": "^4.18.2",
+    "openai": "^6.15.0",
+    "pg": "^8.18.0",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

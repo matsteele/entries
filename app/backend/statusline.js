@@ -17,7 +17,7 @@ function getLocalDate() {
 
 const TODAY = getLocalDate();
 const BASE_DIR = path.join(__dirname, '..', '..');
-const LOG_DIR = path.join(BASE_DIR, 'daily-logs');
+const LOG_DIR = path.join(BASE_DIR, 'tracking', 'daily-logs');
 const LOG_FILE = path.join(LOG_DIR, `daily-log-${TODAY}.json`);
 
 // Context emoji and color mapping
@@ -26,7 +26,9 @@ const CONTEXT_EMOJI = {
   social: '👥',
   professional: '💼',
   cultivo: '🌱',
-  projects: '🚀'
+  projects: '🚀',
+  health: '💪',
+  unstructured: '☀️'
 };
 
 // ANSI color codes for contexts
@@ -35,7 +37,9 @@ const CONTEXT_COLORS = {
   social: '\x1b[44m',      // Blue background
   professional: '\x1b[100m', // Grey background (bright black)
   cultivo: '\x1b[42m',     // Green background
-  projects: '\x1b[45m'     // Magenta background
+  projects: '\x1b[45m',    // Magenta background
+  health: '\x1b[41m',      // Red background
+  unstructured: '\x1b[103m' // Bright yellow background
 };
 
 const RESET = '\x1b[0m';
@@ -99,21 +103,30 @@ if (!log || !log.dailyLog) {
 
 const dailyLog = log.dailyLog;
 const contextFilter = dailyLog.contextFilter || null;
+const viewMode = dailyLog.viewMode || 'novel';
 
 // Get pending tasks in display order (matching CLI logic)
 const allPendingTasks = dailyLog.pendingTasks || [];
 
-function getDisplayOrderedTasks(tasks, filter) {
+function getDisplayOrderedTasks(tasks, filter, mode) {
+  // First filter by view mode (routine vs novel)
+  let filtered = tasks;
+  if (mode === 'routine') {
+    filtered = tasks.filter(t => t.routine === true);
+  } else if (mode === 'novel') {
+    filtered = tasks.filter(t => !t.routine);
+  }
+
   if (filter) {
     // Filtered mode: only return tasks matching the filter
-    return tasks.filter(t => (t.activityContext || 'professional') === filter);
+    return filtered.filter(t => (t.activityContext || 'professional') === filter);
   } else {
     // No filter: return tasks ordered by context groups
-    const contextOrder = ['personal', 'cultivo', 'professional', 'social', 'projects'];
+    const contextOrder = ['personal', 'health', 'cultivo', 'professional', 'social', 'projects', 'unstructured'];
     const displayOrderTasks = [];
 
     contextOrder.forEach(ctx => {
-      const contextTasks = tasks.filter(task => (task.activityContext || 'professional') === ctx);
+      const contextTasks = filtered.filter(task => (task.activityContext || 'professional') === ctx);
       displayOrderTasks.push(...contextTasks);
     });
 
@@ -121,7 +134,7 @@ function getDisplayOrderedTasks(tasks, filter) {
   }
 }
 
-const pendingTasks = getDisplayOrderedTasks(allPendingTasks, contextFilter);
+const pendingTasks = getDisplayOrderedTasks(allPendingTasks, contextFilter, viewMode);
 
 // Display current task if exists (but skip context-only tasks)
 if (dailyLog.currentTask && !dailyLog.currentTask.isContextOnly) {
@@ -183,8 +196,9 @@ if (pendingTasks.length > 0) {
     }
     console.log('');
   }
-  
-  console.log('Todos:');
+
+  const modeLabel = viewMode === 'routine' ? '🔄 Routine' : 'Todos';
+  console.log(`${modeLabel}:`);
 
   // Show context emoji with total time if filter is active
   if (contextFilter) {
@@ -201,13 +215,14 @@ if (pendingTasks.length > 0) {
     const context = task.activityContext || 'professional';
     const emoji = CONTEXT_EMOJI[context] || '💼';
     const timeSpent = task.timeSpent || 0;
+    const routineTag = task.routine ? ' [R]' : '';
 
     // Format: number, emoji, time (if > 0 in brown), title
     if (timeSpent > 0) {
       const mins = timeSpent;
-      console.log(`  ${idx + 1}. ${emoji} ${BROWN}${mins}m${RESET} ${title}`);
+      console.log(`  ${idx + 1}. ${emoji} ${BROWN}${mins}m${RESET} ${title}${routineTag}`);
     } else {
-      console.log(`  ${idx + 1}. ${emoji} ${title}`);
+      console.log(`  ${idx + 1}. ${emoji} ${title}${routineTag}`);
     }
   });
 } else {
@@ -228,4 +243,22 @@ if (pendingTasks.length > 0) {
   } else if (!dailyLog.currentTask) {
     console.log('No tasks');
   }
+}
+
+// Show time budget balance
+try {
+  const TIME_LOG_FILE = path.join(BASE_DIR, 'tracking', 'time-logs', 'time-log.json');
+  if (fs.existsSync(TIME_LOG_FILE)) {
+    const timeLog = JSON.parse(fs.readFileSync(TIME_LOG_FILE, 'utf8'));
+    if (timeLog.timeBudget && timeLog.timeBudget.balance !== undefined) {
+      const balance = timeLog.timeBudget.balance;
+      if (balance >= 0) {
+        console.log(`\n☀️ +${formatTimeSpent(Math.round(balance))}`);
+      } else {
+        console.log(`\n🌙 -${formatTimeSpent(Math.round(Math.abs(balance)))}`);
+      }
+    }
+  }
+} catch (e) {
+  // Silently ignore budget display errors
 }

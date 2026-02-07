@@ -1,17 +1,19 @@
 {
   "scripts": {
-    "journal:add": "node scripts/journal-supabase.js add",
-    "journal:search": "node scripts/journal-supabase.js search",
-    "journal:recent": "node scripts/journal-supabase.js recent",
-    "journal:get": "node scripts/journal-supabase.js get",
-    "journal:help": "node scripts/journal-supabase.js"
+    "start": "cd app/backend && node server.js",
+    "journal:add": "cd app/backend && node journal-cli.js add",
+    "journal:view": "cd app/backend && node journal-cli.js view",
+    "journal:today": "cd app/backend && node journal-cli.js today",
+    "plan:create": "cd app/backend && node plan-cli.js create",
+    "plan:list": "cd app/backend && node plan-cli.js list",
+    "daily:start": "cd app/backend && node daily-cli.js start",
+    "daily:view": "cd app/backend && node daily-cli.js view",
+    "log:current": "cd app/backend && node daily-log-cli.js current",
+    "log:show": "cd app/backend && node daily-log-cli.js show",
+    "time:week": "cd app/backend && node time-tracker.js week"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.78.0",
     "dotenv": "^17.2.3",
-    "openai": "^6.9.0",
-    "pg": "^8.16.3",
-    "postgres": "^3.4.7",
     "uuid": "^13.0.0"
   }
 }

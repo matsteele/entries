@@ -1,61 +1,67 @@
 # Personal Productivity System
 
-A comprehensive personal productivity and journaling system with planning, time tracking, and reflection capabilities.
+A local-first personal productivity and journaling system with planning, time tracking, and reflection capabilities.
+
+## Local-First Design
+
+- **PostgreSQL + pgvector** - ALL narrative content (journals, plans, protocols) with AI-powered semantic search
+- **Local JSON files** - Operational data only (daily logs, time tracking, structured references)
+
+All data stays on your machine. No cloud database.
 
 ## Features
 
-- **Daily Logging**: Track daily activities and reflections
-- **Journal System**: Personal journaling with RAG (Retrieval Augmented Generation) search
-- **Planning System**: Project planning and task management
-- **Time Tracking**: Monitor time spent on activities
-- **Protocols**: Structured workflows for various activities
-
-## Tech Stack
-
-- Node.js backend services
-- Supabase/PostgreSQL database with vector search
-- Python scripts for data processing
-- CLI tools for daily interactions
+- **Journal System**: Personal journaling with semantic search (PostgreSQL)
+- **Planning System**: Project planning with vector embeddings (PostgreSQL)
+- **Protocols**: Structured workflows with semantic search (PostgreSQL)
+- **Daily Task Tracking**: Terminal statusline with context-aware tasks (JSON)
+- **Time Tracking**: Time by context - personal, professional, cultivo, social, projects (JSON)
+- **Semantic Search**: Find entries by meaning, not just keywords (OpenAI embeddings)
 
 ## Getting Started
 
-### Prerequisites
-
-- Node.js (version specified in `.nvmrc`)
-- PostgreSQL/Supabase
-- Python 3.x (for journal scripts)
-
-### Installation
-
 ```bash
+# Install dependencies
 npm install
 cd app/backend && npm install
+
+# Configure .env
+DATABASE_URL=postgresql://matthewsteele@localhost:5432/entries
+OPENAI_API_KEY=your-key
+
+# Connect to database
+psql -U matthewsteele -d entries
 ```
 
-### Configuration
-
-Create a `.env` file with your configuration (see `.env.example` if available).
+See `ARCHITECTURE.md` for full setup and schema details.
 
 ## Project Structure
 
 - `app/backend/` - Backend services and CLI tools
-- `journal/` - Journaling system with templates and scripts
-- `plans/` - Planning system with active plans and templates
-- `protocols/` - Structured workflow guides
-- `scripts/` - Utility and migration scripts
-- `supabase/` - Database migrations and configuration
+  - `daily-log-cli.js` - Daily task tracking CLI
+  - `time-tracker.js` - Time tracking by context
+  - `statusline.js` - Terminal statusline display
+  - `prompt.js` - ZSH prompt integration
+- `protocols/` - Protocol documents (also stored in database)
+  - `digesting-entries.md` - Stream-of-consciousness ingestion protocol
+- `plans/` - Planning system
+  - `data/plans.json` - Plan index (references DB entries by title/ID)
+- `tracking/` - Time tracking and daily logs (JSON, not committed)
+- `docs/` - Additional documentation
 
-## Privacy & Security
+## Privacy
 
-This repository uses a comprehensive `.gitignore` to ensure:
-- Personal daily logs are NOT committed
-- Time tracking data stays private
-- Authentication credentials are protected
-- Personal reflections and data remain local
+- Database runs locally (not in the cloud)
+- All personal data files are in `.gitignore`
+- No data sent to external servers (except OpenAI for embeddings)
 
-**Note**: Never commit files containing personal information, credentials, or API keys.
+## Documentation
+
+- **`ARCHITECTURE.md`** - System architecture, schema, setup
+- **`CLAUDE.md`** - AI assistant instructions
+- **`AGENTS.md`** - Dual-environment sync guidance
+- **`docs/PLANNING_SYSTEM.md`** - Planning system details
 
 ## License
 
 Private repository - Personal use only
-

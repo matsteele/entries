@@ -1,6 +1,6 @@
 # Claude Instructions for Entries Project
 
-> **⚠️ Important for Agents:** This application has a dual-environment architecture. When making changes, you MUST synchronize updates across both ZSH shell configuration (`.zshrc`) and Claude documentation. See [`AGENT.md`](./AGENT.md) for critical guidance on maintaining consistency between user terminal commands and AI assistant capabilities.
+> **⚠️ Important for Agents:** This application has a dual-environment architecture. When making changes, you MUST synchronize updates across both ZSH shell configuration (`.zshrc`) and Claude documentation. See **[AGENTS.md](./AGENTS.md)** for critical guidance on maintaining consistency between user terminal commands and AI assistant capabilities.
 
 ## Three Core Activities
 
@@ -14,33 +14,35 @@ This application supports three interconnected workflows:
 - **Output**: Daily log JSON files, terminal statusline
 - **Key Principle**: Only pull tasks into daily log when ready to work on them today
 
-### 2. 📝 Logging & Journaling (Local Files)
-**Purpose:** Capture and organize life data for reflection and analysis.
+### 2. 📝 Logging & Journaling (PostgreSQL Local Database)
+**Purpose:** Capture and organize life data for reflection and analysis with semantic search.
 
-- **Input**: Journal entries, reflections, notes
-- **Storage**: Local JSON files in `journal/data/`
-- **Tools**: `npm run journal:*` scripts, `app/backend/journal-cli.js`
-- **Output**: Local journal entries (private, never committed to git)
+- **Input**: Journal entries, reflections, protocols, plans
+- **Storage**: Local PostgreSQL database with pgvector extension
+- **Tools**: Custom CLI scripts, direct SQL queries
+- **Features**: Vector embeddings for semantic search, full-text search, metadata extraction
+- **Output**: Local database entries (private, never synced to cloud)
 
 ### 3. 🎯 Planning & Backlog Management (Google Tasks + Calendar)
 **Purpose:** Plan future work and manage task backlog.
 
-- **Planning Phase**: 
-  - Review existing plans in `plans/data/plans.json`
+- **Planning Phase**:
+  - Review existing plans in database (full narrative) and `plans/data/plans.json` (index/hierarchy)
   - Generate new tasks from plans
   - Store tasks in Google Tasks when confirmed as "will definitely do"
 - **Execution Phase**:
-  - User favorites tasks in Google Tasks for that day
-  - `/t pull` pulls only favorited tasks into daily log
+  - User sets due dates on tasks in Google Tasks for today
+  - `/t pull-goog` pulls tasks due today into daily log
+  - `/t pull-jira` pulls assigned Jira tickets into daily log
   - Sync tasks with Google Calendar for time management
 
 **Flow:**
 ```
-Plans (Local JSON) 
-  → Generate Tasks 
-    → Google Tasks (backlog) 
-      → User favorites for today 
-        → /t pull → Daily Log (terminal)
+Plans (Database - full narrative)
+  → Generate Tasks
+    → Google Tasks (backlog)
+      → Set due date for today
+        → /t pull-goog → Daily Log (terminal)
           → Google Calendar (time blocking)
 ```
 
@@ -48,16 +50,16 @@ Plans (Local JSON)
 
 **Planning Session:**
 1. User discusses plans, goals, or projects
-2. Review existing plans in local files (`plans/data/plans.json`)
-3. Update existing plans or create new ones
+2. Review existing plans in database; check `plans/data/plans.json` for plan index/hierarchy
+3. Update existing plans or create new ones (always in database)
 4. Extract actionable tasks from plans
 5. User confirms tasks → Create in Google Tasks with appropriate list/context
 6. Tasks stay in Google Tasks backlog until user is ready
 
 **Daily Execution:**
-1. User reviews Google Tasks and favorites items for today
-2. User runs `/t pull` to pull favorited tasks into terminal daily log
-3. Tasks appear in daily log with appropriate context (per/cul/prof/soc/proj)
+1. User reviews Google Tasks and sets due dates for today
+2. User runs `/t pull-goog` to pull tasks due today into terminal daily log
+3. Tasks appear in daily log with appropriate context (per/cul/prof/soc/proj/heal)
 4. **TODO**: Tasks sync to Google Calendar for time management
 5. User works on tasks, updates via `/t` commands
 6. Completed tasks logged with time tracking by context
@@ -74,7 +76,7 @@ Plans (Local JSON)
 
 **When user discusses their data (protocols, plans, journals, etc.):**
 
-1. **Review existing entries** - Check local files for related content
+1. **Review existing entries** - Query the database for related content
 2. **Pull relevant context** - Bring in related protocols, plans, journals for context
 3. **Provide commentary** - Offer insights based on what's found and recent activity
 4. **Discuss and reflect** with the user
@@ -88,78 +90,26 @@ Plans (Local JSON)
 
 ## Data Location
 
-**All personal data is stored in LOCAL JSON FILES.** See `LOCAL_DATABASE.md` for complete documentation.
+> **⚠️ Database name is `entries`. Connect with: `psql -U matthewsteele -d entries`**
 
-### Storage Locations
+- **Narrative content** → PostgreSQL (journals, plans, protocols, metadata, embeddings)
+- **Operational data** → JSON files (daily logs, time tracking, goals, relationships, decisions)
+- All data stays local. Nothing synced to cloud (except OpenAI API for embeddings).
 
-- **Daily logs**: `daily-logs/daily-log-YYYY-MM-DD.json`
-- **Time tracking**: `time-logs/time-log.json`
-- **Journal entries**: `journal/data/`
-- **Plans**: `plans/data/plans.json`
-- **Planning contexts**: `plans/data/planning_contexts.json`
-- **Goals/Decisions/Relationships**: `goals.json`, `decisions.json`, `relationships.json`
+For full schema, storage rules, setup, and query examples, see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
-⚠️ **All data files are in `.gitignore` and stay local for privacy.**
+### Journal types
 
----
+| Type | What it captures |
+|------|------------------|
+| `events` | Concrete happenings, experiences, who was involved |
+| `contemplation` | Decision points, internal debates, tensions |
+| `plan` | Forward-looking initiatives, strategies, milestones |
+| `protocol` | Repeatable procedures, rules, behavioral guidelines |
+| `entry` | General journal entries, reflections |
+| `quick` | Quick notes |
 
-## Data Structure (Historical Reference - was Supabase)
-
-### `journals` table (by type field)
-
-| Type | What it captures | Analysis provides |
-|------|------------------|-------------------|
-| `events` | Concrete happenings, experiences, activities, who was involved | Relationship insights, pattern observations |
-| `contemplation` | Decision points, internal debates, explorations, tensions | Framework for thinking through decisions, questions to consider |
-| `plan` | Forward-looking initiatives, strategies, phases, milestones | Risk mitigation, resource identification, timeline reality-checks |
-| `protocol` | Repeatable procedures, rules, behavioral guidelines | Optimization ideas, potential challenges, complementary protocols |
-| `entry` | General journal entries, reflections | - |
-| `quick` | Quick notes | - |
-
-### Decisions
-**Decisions do NOT get standalone entries.** Instead:
-- Decisions get integrated into plans and protocols
-- Decisions are referenced from contemplations
-- Major life decisions update existing plans/protocols
-
-### Other tables
-- `plans` - Structured plans with status, context_id, objective_id, project_id
-- `protocols` - Formal protocol documents
-- `journal_metadata` - People, emotions, concepts, key_insights per journal entry
-
----
-
-## Querying Data
-
-### Find all protocols
-```sql
-SELECT id, date, content FROM journals WHERE type = 'protocol' ORDER BY date DESC;
-```
-
-### Find recent contemplations
-```sql
-SELECT id, date, content FROM journals WHERE type = 'contemplation' ORDER BY date DESC LIMIT 10;
-```
-
-### Find plans
-```sql
-SELECT id, date, content FROM journals WHERE type = 'plan' ORDER BY date DESC;
-```
-
-### Keyword search
-```sql
-SELECT id, date, type, content FROM journals WHERE content ILIKE '%search term%';
-```
-
-### Semantic search (pgvector)
-The `embedding` column enables similarity search:
-```sql
-SELECT id, date, type, content, 1 - (embedding <=> '[query_embedding]') as similarity
-FROM journals
-WHERE embedding IS NOT NULL
-ORDER BY embedding <=> '[query_embedding]'
-LIMIT 10;
-```
+**Decisions do NOT get standalone entries** — they integrate into plans and protocols.
 
 ---
 
@@ -272,115 +222,34 @@ VALUES (gen_random_uuid()::text, CURRENT_DATE, '[content]', '[type]', '[context]
 
 ## Daily Activity Logging
 
-**Two separate task systems exist - keep them distinct:**
+**Two separate task systems exist — keep them distinct:**
 
 ### 1. Terminal Todos (daily-log CLI)
-Local task tracking shown in terminal statusline. These are the tasks for **today's focused work**.
+Local task tracking for **today's focused work**. Context-aware numbering, grouped display, time tracking by context, routine/novel task views, and a time budget system.
 
-**Key Features:**
-- **Context-aware task numbering**: When in a specific context, task numbers map to that context's tasks only
-- **Grouped display**: When viewing all tasks, they're grouped by context with emoji separators  
-- **Time tracking by context**: End-of-day shows time spent in each context
+For full command reference, context auto-detection keywords, routine vs novel tasks, and time budget details, see **[tracking/SESSION_ACTIVITY_TRACKING.md](./tracking/SESSION_ACTIVITY_TRACKING.md)**. For the command quick-reference table, see **[ARCHITECTURE.md](./ARCHITECTURE.md#t-command-reference)**.
 
-**Slash commands:**
-- `/t start` - Start new day, carry over pending tasks and current task from last available day
-- `/t per|cul|prof|soc|proj` - Quick context switch (filters todos to that context)
-- `/t all` - Clear filter, show all tasks grouped by context emoji
-- `/t add "task" [context]` - Add pending task
-  - Context auto-detected from task keywords if omitted
-  - If in a filtered context (e.g., after `/t per`), uses that context by default
-  - Can override with explicit context: `/t add "task" cul`
-- `/t addS "task" [context]` - Add task and immediately switch to it
-- `/t -N` - Switch to pending task N (context-aware: maps to filtered list)
-- `/t m-N context` - Modify task context (0 for current task, N for pending task)
-  - Valid contexts: per, soc, prof, cul, proj
-  - Example: `/t m-0 cul` (change current task to cultivo)
-  - Example: `/t m-2 per` (change pending task #2 to personal)
-- `/t c-N` - Complete pending task N (context-aware)
-- `/t cs-N` - Complete current task and switch to pending task N
-- `/t p-N` - Move current task to pending
-- `/t d-N` - Delete pending task N (context-aware)
-- `/t jira` - Pull assigned Jira tickets (NOT done) and add to Cultivo pending tasks
-  - Fetches all tickets assigned to you with status NOT IN (Done, Closed)
-  - Automatically deduplicates by Jira ticket number
-  - Stores ticket key (TSP-XXXX) in task for linking
-  - Only adds tickets not already in pending tasks
-- **TODO: `/t pull`** - Pull favorited tasks from Google Tasks into daily log
+**Key commands:**
+- `/t start` - Start new day, carry over tasks, archive yesterday's time
+- `/t add "task" [context] [r]` - Add task (optional context code, trailing `r` = routine)
+- `/t -N` / `/t c-N` / `/t cs-N` / `/t d-N` - Switch / complete / complete+switch / delete
+- `/t r` - Toggle routine/novel view
+- `/t per|soc|prof|cul|proj|heal|us|all` - Context filter
+- `/t jira` / `/t pull-goog` - Pull from Jira / Google Tasks
 
-**Important**: When in a filtered context (e.g., `/t per`), task numbers map to only that context's tasks. So `/t -1` switches to the first personal task, not the first overall task. Use `/t all` to see all tasks.
-
-**NPM commands (from entries/app/backend):**
-- `npm run log:start-day` - Start new day (archives yesterday's time automatically)
-- `npm run log:current "task"` - Set current task
-- `npm run log:complete` - Complete current task
-- `npm run log:complete "work description"` - Add completed work to log
-- `npm run log:complete-switch N` - Complete current task and switch to pending task N (clearer interface)
-- `npm run log:modify-context N context` - Modify task context (0=current, N=pending task number)
-  - Example: `npm run log:modify-context 0 cul`
-  - Example: `npm run log:modify-context 2 per`
-- `npm run log:pending "task"` - Add pending task
-- `npm run log:show [date]` - Display daily log
-- `npm run log:note "note text"` - Add note to current task
-- `npm run log:note-pending N "note text"` - Add note to pending task N
-- `npm run log:note-completed <work-id> "note text"` - Add note to completed work
-
-**Time tracking commands:**
-- `npm run time:week` - Show current week's time by context
-- `npm run time:month` - Show current month's time by context
-- `npm run time:year [year]` - Show year's time by context
-- `npm run time:archive [date]` - Manually archive a day's time (usually automatic)
+**Important**: When in a filtered context, task numbers map to only that context's tasks.
 
 ### 2. Google Tasks (MCP)
-Cloud-based task backlog. Use for capturing ideas, longer-term tasks, and tasks organized into different task lists (contexts).
-
-**Purpose in Workflow:**
-1. Store tasks generated from plans (when confirmed as "will definitely do")
-2. Backlog management and task organization
-3. User favorites tasks for the day → `/t pull` brings them into daily log
-4. **TODO: Integration with Google Calendar for time blocking**
-
-**MCP tools:**
-- `mcp__google-tasks__listTaskLists` - List all your Google Tasks lists (e.g., "Planning", "Finance", "Home")
-- `mcp__google-tasks__getTasks` - Get tasks from a specific task list
-- `mcp__google-tasks__createTask` - Create a new task in a specific list
-- `mcp__google-tasks__updateTask` - Update an existing task
-- `mcp__google-tasks__completeTask` - Mark a task as complete
-- `mcp__google-tasks__deleteTask` - Delete a task
-- `mcp__google-tasks__searchTasks` - Search across all task lists
-- `mcp__google-tasks__syncAllTasks` - Get all tasks from all lists
-
-### Important Distinction
+Cloud-based task backlog for longer-term tasks and plan-generated work.
 
 | Action | Terminal Todos | Google Tasks |
 |--------|----------------|--------------|
-| "Add task from plan" | - | `mcp__google-tasks__create` when confirmed |
-| "Favorite for today" | - | User action in Google Tasks UI |
-| "Pull today's tasks" | `/t pull` (pulls favorited) | Source for pull |
-| "Add immediate task" (default) | `/t add` or `pending` command | - |
-| "Complete task" | `/t c-N` | `mcp__google-tasks__update` with status |
+| "Add task from plan" | - | `mcp__google-tasks__createTask` |
+| "Pull today's tasks" | `/t pull-goog` (due today) | Source for pull |
+| "Add immediate task" | `/t add` (default) | - |
+| "Complete task" | `/t c-N` | `mcp__google-tasks__completeTask` |
 
-**Default behavior:**
-- Adding tasks from plans → Google Tasks (for backlog management)
-- Favoriting for today → User action in Google Tasks
-- Pulling today's work → `/t pull` (Terminal Todos)
-- Completing tasks → Terminal Todos (unless managing backlog in Google Tasks)
-
-### Context auto-detection
-
-When `--c` is not specified, tasks are automatically categorized into one of these contexts:
-
-- **Personal** (`per`): Health, appointments, family, personal errands (dentist, doctor, health, family, personal)
-- **Social** (`soc`): Relationships, social events, hangouts, conversations (friends, meet, dinner, coffee, social)
-- **Professional** (`prof`): Non-Cultivo work, career activities (meeting, interview, job, career, resume)
-- **Cultivo** (`cul`): Cultivo-specific work (PR, feature, bug, test, migration, review, deploy, Jira, sprint)
-- **Projects** (`proj`): Personal projects, side work, trading (btx, trading, side project, freelance, consulting)
-
-**Auto-detection keywords** (case-insensitive):
-- Cultivo: PR, feature, bug, test, migration, review, deploy, sprint, Jira, TSP-
-- Personal: dentist, doctor, appointment, health, family, errands, personal
-- Social: friends, meet, dinner, coffee, hangout, party, social, drinks
-- Projects: trading, btx, side, freelance, consulting, project
-- Professional: (default if none of the above match)
+**Default:** Plan tasks → Google Tasks backlog → User sets due date → `/t pull-goog` → Daily Log.
 
 ### End of Day Update Format
 
@@ -440,7 +309,7 @@ Use standard Markdown syntax for hyperlinks in Slack updates:
 5. Format completed tasks with ticket and PR links
 
 **Task metadata retention:**
-When Jira tasks are added to the todo list (via `/t pull` or manual add), they should retain:
+When Jira tasks are added to the todo list (via `/t pull-jira` or manual add), they should retain:
 - `jiraTicket`: Ticket number (e.g., "TSP-1234")
 - `jiraUrl`: Full Jira ticket URL
 - `prNumber`: Associated PR number (if linked in Jira)
@@ -535,24 +404,27 @@ Claude should:
 
 ## Context Tags
 
-Always apply to entries:
-- **Personal** - Feelings, reflections, personal growth, health
-- **Social** - Relationships, conversations, social activities
-- **Professional** - Work, meetings, career (non-Cultivo)
-- **Cultivo** - Cultivo-specific work
-- **Projects** - Personal projects, side work
+Always apply to entries. See **[ARCHITECTURE.md](./ARCHITECTURE.md#contexts)** for full context table with codes, emojis, and budget roles.
+
+- **Health** (`heal`) - Sleep, meals, hygiene, exercise, medical
+- **Personal** (`per`) - Feelings, reflections, growth, family, errands
+- **Social** (`soc`) - Relationships, conversations, social activities
+- **Professional** (`prof`) - Work, meetings, career (non-Cultivo)
+- **Cultivo** (`cul`) - Cultivo-specific work
+- **Projects** (`proj`) - Personal projects, side work
+- **Unstructured** (`us`) - Leisure, free time, browsing
 
 ---
 
 ## Stream of Consciousness Entry Processing
 
-When user provides stream of consciousness writing (aim: 2+ pages), follow the systematic protocol documented in `protocols/PROTOCOL_LOGGING.md`.
+When user provides stream of consciousness writing (aim: 2+ pages), follow the systematic protocol documented in `protocols/digesting-entries.md`.
 
 **Key Steps:**
 1. Parse and categorize into: Events, Contemplations, Plans, Protocols, Tasks
 2. Extract people/relationships
 3. Map decisions to existing plans/protocols
-4. Search Supabase for existing related entries
+4. Search database for existing related entries
 5. Update existing entries (don't duplicate)
 6. Create new entries only when no relevant match exists
 7. Extract actionable tasks → add to Google Tasks if confirmed
@@ -565,7 +437,7 @@ When user provides stream of consciousness writing (aim: 2+ pages), follow the s
 - **Check existing entries first** using semantic search (similarity > 0.8 = update, not create)
 - **People must be disambiguated** against relationship data
 
-See full protocol: `protocols/PROTOCOL_LOGGING.md`
+See full protocol: `protocols/digesting-entries.md`
 
 ---
 
@@ -583,52 +455,17 @@ See full protocol: `protocols/PROTOCOL_LOGGING.md`
 
 ## Session Activity Tracking
 
-All Claude sessions should track activities for end-of-day debriefs. See `protocols/SESSION_ACTIVITY_TRACKING.md` for full details.
+Track activities during sessions for end-of-day debriefs. Update daily log periodically.
 
-**During Session:**
-- Track significant activities using npm log commands
-- Update daily log periodically (every 15-30 minutes)
-- Maintain both professional and personal context
-
-**NPM Commands (from entries/app/backend):**
-- `npm run log:start-day` - Start new day (archives yesterday's time automatically)
-- `npm run log:current "task"` - Set current task
-- `npm run log:complete` - Complete current task
-- `npm run log:complete "work description"` - Add completed work to log
-- `npm run log:show [date]` - Display daily log
-
-**End of Day Debrief:**
-When user requests "end of day debrief" or "generate Slack update", create formatted summary using this **exact format**:
-
-```
-⬆️ Daily Update - [Date]
-✅ [Completed task/accomplishment]
-✅ [Completed task/accomplishment]
-⏳ [In progress task]
-⏭️ [Next up/tomorrow task]
-```
-
----
-
-## Key Principles
-
-1. **Semantic search first** - Find related entries before creating new
-2. **Update over create** - Evolve existing entries when relevant
-3. **Decisions integrate** - They don't stand alone, they update plans/protocols
-4. **Discuss then log** - User explicitly asks to create/update entries
-5. **Provide analysis** - Offer insights appropriate to entry type
-6. **No duplicates** - Check existing before adding
+For full details on session behavior, JSON structure, activity types, and NPM commands, see **[tracking/SESSION_ACTIVITY_TRACKING.md](./tracking/SESSION_ACTIVITY_TRACKING.md)**.
 
 ---
 
 ## Related Documentation
 
-- **[AGENT.md](./AGENT.md)** - **READ THIS FIRST when making changes!** Explains the dual-environment architecture and synchronization requirements between ZSH and Claude
-- **[protocols/](./protocols/)** - User protocols for specific workflows
-  - `CLAUDE_JOURNAL_GUIDE.md` - Journal entry guidance
-  - `SESSION_ACTIVITY_TRACKING.md` - Activity tracking protocol
-  - `PROTOCOL_LOGGING.md` - Protocol documentation standards
-  - `end-of-day-update.md` - EOD update format
-  - `refactoring-protocol.md` - Code refactoring process
+- **[AGENTS.md](./AGENTS.md)** - Dual-environment sync guidance (ZSH + Claude), testing checklist
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - System architecture, database schema, contexts, `/t` command reference, setup
+- **[tracking/SESSION_ACTIVITY_TRACKING.md](./tracking/SESSION_ACTIVITY_TRACKING.md)** - Full `/t` command details, routine/novel tasks, time budget, context auto-detection, session behavior
+- **[protocols/](./protocols/)** - User protocols
+  - `digesting-entries.md` - Stream-of-consciousness entry ingestion protocol
 - **[docs/PLANNING_SYSTEM.md](./docs/PLANNING_SYSTEM.md)** - Planning system documentation
-- **[supabase/](./supabase/)** - Database setup and migration docs
