@@ -99,8 +99,8 @@ function calculateDailyContextTime(dailyLog) {
     contextTimes[context] = (contextTimes[context] || 0) + (task.timeSpent || 0);
   });
 
-  // Add current task time (if exists and not context-only)
-  if (log.currentTask && !log.currentTask.isContextOnly) {
+  // Add current task time (including context-only tracking tasks)
+  if (log.currentTask) {
     const context = log.currentTask.activityContext || 'professional';
     const startTime = new Date(log.currentTask.startedAt);
     const now = new Date();

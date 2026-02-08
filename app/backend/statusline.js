@@ -171,8 +171,8 @@ if (contextFilter) {
     }
   });
 
-  // Add time from current task if it's in this context
-  if (dailyLog.currentTask && !dailyLog.currentTask.isContextOnly) {
+  // Add time from current task if it's in this context (including context-only tracking)
+  if (dailyLog.currentTask) {
     const currentContext = dailyLog.currentTask.activityContext || 'professional';
     if (currentContext === contextFilter) {
       const elapsedMinutes = calculateElapsedMinutes(dailyLog.currentTask.startedAt);

@@ -42,7 +42,9 @@
     "log:pull-jira": "node daily-log-cli.js pull-jira",
     "log:pull-goog": "node daily-log-cli.js pull-goog",
     "search": "node search-cli.js",
-    "embeddings:backfill": "node embeddings.js"
+    "embeddings:backfill": "node embeddings.js",
+    "idle:check": "node idle-monitor.js",
+    "task:check": "node task-checker.js"
   },
   "keywords": [
     "planning",

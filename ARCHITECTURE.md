@@ -155,10 +155,43 @@ CREATE TABLE journal_metadata (
    ↓
 2. Write to tracking/daily-logs/daily-log-YYYY-MM-DD.json
    ↓
-3. Update tracking/time-logs/time-log.json
+3. On task completion → push event to Google Calendar ("Time Tracking" calendar)
    ↓
-4. Time budget (earned/spent) updated on day archive
+4. Update tracking/time-logs/time-log.json
+   ↓
+5. Time budget (earned/spent) updated on day archive
 ```
+
+### Google Calendar Sync
+
+Completed task blocks are automatically pushed to a dedicated **"Time Tracking"** Google Calendar as color-coded events.
+
+**How it works:**
+- On task completion (`/t c-N`, `/t cs-N`, `/t c-0`), a calendar event is created
+- Event spans `completedAt - timeSpent` → `completedAt` (reflects total work time)
+- Events are color-coded by context (see color map below)
+- Calendar event ID is stored as `calendarEventId` on the completed entry
+- Push is fire-and-forget — calendar failures don't block task completion
+
+**Context → Calendar color mapping:**
+
+| Context | Color ID | Google Calendar Color |
+|---------|----------|----------------------|
+| Cultivo | 2 | Sage (green) |
+| Professional | 9 | Blueberry (blue) |
+| Personal | 5 | Banana (yellow) |
+| Social | 3 | Grape (purple) |
+| Projects | 6 | Tangerine (orange) |
+| Health | 10 | Basil (dark green) |
+| Unstructured | 8 | Graphite (gray) |
+
+**Setup (one-time):**
+1. `node app/backend/daily-log-cli.js setup-gcal` — OAuth flow, saves `GOOGLE_CALENDAR_REFRESH_TOKEN` to `.env`
+2. `node app/backend/daily-log-cli.js init-gcal` — Creates calendar, saves `GOOGLE_CALENDAR_ID` to `.env`
+
+**Key files:**
+- `app/backend/google-calendar.js` — Calendar API helper (token refresh, event creation)
+- `.env` — `GOOGLE_CALENDAR_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`
 
 ### Contexts
 
@@ -264,6 +297,55 @@ createdb -U matthewsteele entries
 - **`docs/PLANNING_SYSTEM.md`** - Planning system details
 - **`AGENTS.md`** - Dual-environment sync guidance
 - **`tracking/SESSION_ACTIVITY_TRACKING.md`** - Full `/t` command details, routine/novel tasks, time budget
+
+## Background Daemons
+
+Two launchd agents run in the background to automate time tracking:
+
+### Idle Monitor (`idle-monitor.js`)
+
+Detects when the computer sleeps/idles and auto-pauses the active task.
+
+- **Interval**: Every 2 minutes (StartInterval: 120)
+- **Mechanism**: Writes a heartbeat timestamp each run. On wake, detects the gap between last heartbeat and now. If >5 minutes, pauses the active task backdated to the last heartbeat time and switches to unstructured.
+- **State file**: `tracking/idle-monitor/heartbeat.json`
+- **Logs**: `tracking/idle-monitor/idle-monitor.log`
+- **plist**: `~/Library/LaunchAgents/com.entries.idle-monitor.plist`
+
+### Task Checker (`task-checker.js`)
+
+Periodic popup asking if the user is still working on the current task.
+
+- **Interval**: Every 30 minutes (StartInterval: 1800)
+- **Mechanism**: Shows a macOS native dialog (via osascript) with the current task and elapsed time. User can continue, switch to a pending task, or pause.
+- **Dialog flow**: First dialog asks "Still working on this?" → if "Switch Task", second dialog shows pending task list via `choose from list`
+- **State file**: `tracking/idle-monitor/task-check.json`
+- **Logs**: `tracking/idle-monitor/task-checker.log`
+- **plist**: `~/Library/LaunchAgents/com.entries.task-checker.plist`
+- **Skips when**: no task, unstructured mode, task just started (<5min), task changed since last check
+
+### Managing Daemons
+
+```bash
+# Load (start)
+launchctl load ~/Library/LaunchAgents/com.entries.idle-monitor.plist
+launchctl load ~/Library/LaunchAgents/com.entries.task-checker.plist
+
+# Unload (stop)
+launchctl unload ~/Library/LaunchAgents/com.entries.idle-monitor.plist
+launchctl unload ~/Library/LaunchAgents/com.entries.task-checker.plist
+
+# Check status
+launchctl list | grep entries
+
+# Manual test
+cd app/backend && npm run idle:check
+cd app/backend && npm run task:check
+
+# View logs
+tail -20 tracking/idle-monitor/idle-monitor.log
+tail -20 tracking/idle-monitor/task-checker.log
+```
 
 ## `/t` Command Reference
 

@@ -8,6 +8,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 
 const fs = require('fs');
 const path = require('path');
+const { createCalendarEvent, createTimeTrackingCalendar } = require('./google-calendar');
 
 // Constants
 const BASE_DIR = path.join(__dirname, '..', '..');
@@ -130,8 +131,8 @@ function updateContextTotals(logData) {
     contextTotals[context] = (contextTotals[context] || 0) + (task.timeSpent || 0);
   });
 
-  // Add current task time (if exists and not context-only)
-  if (log.currentTask && !log.currentTask.isContextOnly) {
+  // Add current task time (including context-only tracking)
+  if (log.currentTask) {
     const context = log.currentTask.activityContext || 'professional';
     const startTime = new Date(log.currentTask.startedAt);
     const now = new Date();
@@ -434,6 +435,10 @@ function completeCurrentTask(newTaskDescription = null) {
 
   logData.dailyLog.completedWork.push(completedEntry);
 
+  // Push to Google Calendar (fire-and-forget)
+  const eventId = createCalendarEvent(completedEntry);
+  if (eventId) completedEntry.calendarEventId = eventId;
+
   const contextEmojiMap = CONTEXT_EMOJI_MAP;
   const contextEmoji = contextEmojiMap[completedEntry.activityContext] || '💼';
   const timeStr = formatTimeSpent(timeSpent);
@@ -685,33 +690,51 @@ function addPendingTaskAndSwitch(description) {
   const activityContext = contextOverride || logData.dailyLog.contextFilter || detectContext(cleanDesc);
   const category = categorizeWork(cleanDesc);
 
-  // If there's a current task, move it to pending
+  // If there's a current task, handle it
   if (logData.dailyLog.currentTask) {
     const prevTask = logData.dailyLog.currentTask;
     const elapsedMinutes = calculateElapsedMinutes(prevTask.startedAt);
     const timeSpent = (prevTask.timeSpent || 0) + elapsedMinutes;
 
-    const pendingEntry = {
-      id: generateId(),
-      title: prevTask.title,
-      activityContext: prevTask.activityContext,
-      category: categorizeWork(prevTask.title),
-      priority: 'medium',
-      timeSpent: timeSpent,
-      notes: prevTask.notes || []
-    };
+    if (prevTask.isContextOnly) {
+      // Context-only task: log time to completed work
+      const completedEntry = {
+        id: generateId(),
+        timestamp: new Date().toISOString(),
+        category: 'Context',
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        timeSpent: timeSpent,
+        details: { completedAt: new Date().toISOString() }
+      };
+      logData.dailyLog.completedWork.push(completedEntry);
+      const contextEmoji = CONTEXT_EMOJI_MAP[prevTask.activityContext] || '💼';
+      const timeStr = formatTimeSpent(timeSpent);
+      console.log(`\n⏸️  ${contextEmoji} ${prevTask.activityContext} context time logged: ${timeStr}`);
+    } else {
+      // Regular task: move to pending
+      const pendingEntry = {
+        id: generateId(),
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        category: categorizeWork(prevTask.title),
+        priority: 'medium',
+        timeSpent: timeSpent,
+        notes: prevTask.notes || []
+      };
 
-    // Preserve routine flag from current task
-    if (prevTask.routine) {
-      pendingEntry.routine = true;
+      // Preserve routine flag from current task
+      if (prevTask.routine) {
+        pendingEntry.routine = true;
+      }
+
+      logData.dailyLog.pendingTasks.push(pendingEntry);
+
+      const contextEmojiMap = CONTEXT_EMOJI_MAP;
+      const contextEmoji = contextEmojiMap[prevTask.activityContext] || '💼';
+      const timeStr = formatTimeSpent(timeSpent);
+      console.log(`\n⏸️  Previous task moved to pending: ${contextEmoji} ${prevTask.title} (${timeStr})`);
     }
-
-    logData.dailyLog.pendingTasks.push(pendingEntry);
-
-    const contextEmojiMap = CONTEXT_EMOJI_MAP;
-    const contextEmoji = contextEmojiMap[prevTask.activityContext] || '💼';
-    const timeStr = formatTimeSpent(timeSpent);
-    console.log(`\n⏸️  Previous task moved to pending: ${contextEmoji} ${prevTask.title} (${timeStr})`);
   }
 
   // Set the new task as current
@@ -799,11 +822,16 @@ function switchToTask(taskNumber) {
         activityContext: prevTask.activityContext,
         timeSpent: timeSpent,
         details: {
+          startedAt: prevTask.startedAt,
           completedAt: new Date().toISOString()
         }
       };
       logData.dailyLog.completedWork.push(completedEntry);
-      
+
+      // Push to Google Calendar (fire-and-forget)
+      const ctxEventId = createCalendarEvent(completedEntry);
+      if (ctxEventId) completedEntry.calendarEventId = ctxEventId;
+
       const contextEmojiMap = CONTEXT_EMOJI_MAP;
       const contextEmoji = contextEmojiMap[prevTask.activityContext] || '💼';
       const timeStr = formatTimeSpent(timeSpent);
@@ -919,6 +947,10 @@ function completeTaskByNumber(taskNumber) {
 
   logData.dailyLog.completedWork.push(completedEntry);
   logData.dailyLog.pendingTasks.splice(actualIndex, 1);
+
+  // Push to Google Calendar (fire-and-forget)
+  const eventId = createCalendarEvent(completedEntry);
+  if (eventId) completedEntry.calendarEventId = eventId;
 
   saveDailyLog(logData);
 
@@ -1152,36 +1184,53 @@ function pauseCurrentTask(customEndTime = null, addNote = null) {
     });
   }
 
-  const pendingEntry = {
-    id: generateId(),
-    title: currentTask.title,
-    activityContext: currentTask.activityContext,
-    category: categorizeWork(currentTask.title),
-    priority: 'medium',
-    timeSpent: timeSpent,
-    notes: notes
-  };
-
-  // Preserve routine flag
-  if (currentTask.routine) {
-    pendingEntry.routine = true;
-  }
-
-  logData.dailyLog.pendingTasks.push(pendingEntry);
-  logData.dailyLog.currentTask = null;
-
-  saveDailyLog(logData);
-
   const contextEmojiMap = CONTEXT_EMOJI_MAP;
   const contextEmoji = contextEmojiMap[currentTask.activityContext] || '💼';
   const timeStr = formatTimeSpent(timeSpent);
 
-  if (addNote) {
-    console.log(`\n⏸️  Task auto-paused: ${contextEmoji} ${currentTask.title} (${timeStr})\n`);
-  } else if (customEndTime) {
-    console.log(`\n⏸️  Task paused at ${endTime.toLocaleTimeString()}: ${contextEmoji} ${currentTask.title} (${timeStr})\n`);
+  if (currentTask.isContextOnly) {
+    // Context-only task: log time to completed work, don't add to pending
+    const completedEntry = {
+      id: generateId(),
+      timestamp: timestamp,
+      category: 'Context',
+      title: currentTask.title,
+      activityContext: currentTask.activityContext,
+      timeSpent: timeSpent,
+      details: { completedAt: timestamp }
+    };
+    logData.dailyLog.completedWork.push(completedEntry);
+    logData.dailyLog.currentTask = null;
+    saveDailyLog(logData);
+    console.log(`\n⏸️  ${contextEmoji} ${currentTask.activityContext} context time logged: ${timeStr}\n`);
   } else {
-    console.log(`\n✅ Moved to pending: ${contextEmoji} ${currentTask.title} (${timeStr})\n`);
+    const pendingEntry = {
+      id: generateId(),
+      title: currentTask.title,
+      activityContext: currentTask.activityContext,
+      category: categorizeWork(currentTask.title),
+      priority: 'medium',
+      timeSpent: timeSpent,
+      notes: notes
+    };
+
+    // Preserve routine flag
+    if (currentTask.routine) {
+      pendingEntry.routine = true;
+    }
+
+    logData.dailyLog.pendingTasks.push(pendingEntry);
+    logData.dailyLog.currentTask = null;
+
+    saveDailyLog(logData);
+
+    if (addNote) {
+      console.log(`\n⏸️  Task auto-paused: ${contextEmoji} ${currentTask.title} (${timeStr})\n`);
+    } else if (customEndTime) {
+      console.log(`\n⏸️  Task paused at ${endTime.toLocaleTimeString()}: ${contextEmoji} ${currentTask.title} (${timeStr})\n`);
+    } else {
+      console.log(`\n✅ Moved to pending: ${contextEmoji} ${currentTask.title} (${timeStr})\n`);
+    }
   }
 }
 
@@ -1224,6 +1273,10 @@ function completeCurrentAndSwitch(taskNumber) {
   }
 
   logData.dailyLog.completedWork.push(completedEntry);
+
+  // Push to Google Calendar (fire-and-forget)
+  const calEventId = createCalendarEvent(completedEntry);
+  if (calEventId) completedEntry.calendarEventId = calEventId;
 
   const contextEmojiMap = CONTEXT_EMOJI_MAP;
   const contextEmoji = contextEmojiMap[completedEntry.activityContext] || '💼';
@@ -1492,8 +1545,14 @@ function switchToContext(contextCode) {
     }
   }
 
-  // Clear current task and just set context filter
-  logData.dailyLog.currentTask = null;
+  // Set a context-only tracking task so time tracks to this context
+  logData.dailyLog.currentTask = {
+    title: context,
+    activityContext: context,
+    startedAt: timestamp,
+    timeSpent: 0,
+    isContextOnly: true
+  };
   logData.dailyLog.contextFilter = context;
 
   saveDailyLog(logData);
@@ -1502,7 +1561,7 @@ function switchToContext(contextCode) {
   const filteredTasks = logData.dailyLog.pendingTasks.filter(t =>
     (t.activityContext || 'professional') === context
   );
-  console.log(`\n✅ ${contextEmoji} ${filteredTasks.length} task(s)\n`);
+  console.log(`\n${contextEmoji} ${context.toUpperCase()} — tracking time (${filteredTasks.length} task(s))\n`);
 }
 
 function calculateTimeByContext(log) {
@@ -1548,7 +1607,11 @@ function showDailyLog(date = TODAY) {
     const elapsedMinutes = calculateElapsedMinutes(log.currentTask.startedAt);
     const totalTime = (log.currentTask.timeSpent || 0) + elapsedMinutes;
     const timeStr = formatTimeSpent(totalTime);
-    console.log(`   ${contextEmoji} ${contextLabel} ${log.currentTask.title}`);
+    if (log.currentTask.isContextOnly) {
+      console.log(`   ${contextEmoji} ${contextLabel} (context tracking)`);
+    } else {
+      console.log(`   ${contextEmoji} ${contextLabel} ${log.currentTask.title}`);
+    }
     console.log(`   Started: ${log.currentTask.startedAt.split('T')[1].substring(0, 8)}`);
     console.log(`   ⏱️  Time spent: ${timeStr}`);
     if (log.currentTask.context) {
@@ -2509,6 +2572,95 @@ try {
       pullGoogleTasks();
       break;
 
+    case 'setup-gcal': {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        console.error('\n❌ GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env\n');
+        process.exit(1);
+      }
+      const http = require('http');
+      const GCAL_PORT = 8976;
+      const redirectUri = `http://127.0.0.1:${GCAL_PORT}`;
+      const scopes = encodeURIComponent('https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/tasks');
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scopes}&access_type=offline&prompt=consent`;
+
+      console.log('\n📋 Google Calendar OAuth Setup\n');
+      console.log('Opening browser for authorization...\n');
+
+      const gcalServer = http.createServer((req, res) => {
+        const reqUrl = new URL(req.url, redirectUri);
+        const code = reqUrl.searchParams.get('code');
+        const authError = reqUrl.searchParams.get('error');
+
+        if (authError) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<h2>Authorization failed</h2><p>You can close this tab.</p>');
+          console.error(`\n❌ Authorization error: ${authError}\n`);
+          gcalServer.close();
+          return;
+        }
+
+        if (!code) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<p>Waiting for authorization...</p>');
+          return;
+        }
+
+        // Exchange code for tokens
+        const { execSync: execSyncLocal } = require('child_process');
+        try {
+          const tokenResponse = execSyncLocal(
+            `curl -s -X POST https://oauth2.googleapis.com/token ` +
+            `-d code="${code}" ` +
+            `-d client_id="${clientId}" ` +
+            `-d client_secret="${clientSecret}" ` +
+            `-d redirect_uri="${redirectUri}" ` +
+            `-d grant_type=authorization_code`,
+            { encoding: 'utf8' }
+          );
+          const tokenData = JSON.parse(tokenResponse);
+          if (tokenData.refresh_token) {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<h2>Authorization successful!</h2><p>You can close this tab.</p>');
+            console.log('✅ Got refresh token! Add this to your .env:\n');
+            console.log(`GOOGLE_CALENDAR_REFRESH_TOKEN=${tokenData.refresh_token}\n`);
+          } else if (tokenData.error) {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(`<h2>Error</h2><p>${tokenData.error}: ${tokenData.error_description}</p>`);
+            console.error(`\n❌ Error: ${tokenData.error} - ${tokenData.error_description}\n`);
+          } else {
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<h2>No refresh token returned</h2><p>Try again.</p>');
+            console.log('\n⚠️  No refresh token returned. Response:');
+            console.log(JSON.stringify(tokenData, null, 2));
+          }
+        } catch (e) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`<h2>Error</h2><p>${e.message}</p>`);
+          console.error(`\n❌ Token exchange failed: ${e.message}\n`);
+        }
+        gcalServer.close();
+      });
+
+      gcalServer.listen(GCAL_PORT, () => {
+        console.log(`Listening on ${redirectUri} for callback...\n`);
+        const { exec: execOpen } = require('child_process');
+        execOpen(`open "${authUrl}"`);
+      });
+      break;
+    }
+
+    case 'init-gcal': {
+      console.log('\n📅 Creating "Time Tracking" calendar...\n');
+      const calId = createTimeTrackingCalendar();
+      if (calId) {
+        console.log('✅ Calendar created! Add this to your .env:\n');
+        console.log(`GOOGLE_CALENDAR_ID=${calId}\n`);
+      }
+      break;
+    }
+
     case 'help':
     case '--help':
     case '-h':
@@ -2531,6 +2683,10 @@ try {
     case 'us':
     case 'unstructured':
       switchToContext(command);
+      // Check if 'r' argument is present to toggle view mode
+      if (args.length > 0 && args[0].toLowerCase() === 'r') {
+        toggleViewMode();
+      }
       break;
 
     case 'r':
