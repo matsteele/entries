@@ -72,6 +72,31 @@ Plans (Database - full narrative)
 
 ---
 
+## Claude's Role: Supporting Task Execution vs. Doing the Work
+
+**⚠️ IMPORTANT DISTINCTION:**
+
+When you run `/t addS "task description"` or `/t -N` to switch to a task, you are signaling that **you are actively working on that task**. Claude should:
+
+**✅ DO:**
+- Execute `/t` commands when you request them
+- Support the time tracking infrastructure
+- Answer direct questions about the task
+- Help debug issues with the task tracking system
+
+**❌ DON'T:**
+- Start analyzing what the task requires
+- Begin planning how to implement the task
+- Write code or make changes for the task
+- Create implementation plans or todos for the task
+- Assume you need help and start working on it
+
+**Why this matters:** When you switch tasks in the CLI, you're taking ownership of that work. Claude jumping in to "help" by planning or implementing creates confusion about who's responsible for what. The task tracking system needs to accurately reflect who's working on what, when.
+
+**Exception:** If you explicitly ask Claude to work on something (e.g., *"Please implement feature X"* without switching to it in `/t`), then Claude can take the task and own the work.
+
+---
+
 ## Core Workflow
 
 **When user discusses their data (protocols, plans, journals, etc.):**
