@@ -251,6 +251,50 @@ Cloud-based task backlog for longer-term tasks and plan-generated work.
 
 **Default:** Plan tasks → Google Tasks backlog → User sets due date → `/t pull-goog` → Daily Log.
 
+### 3. Session Logging (`/t log-session`)
+
+**Claude-only workflow** — logs the current conversation as a tracked work session.
+
+When the user says `/t log-session`, Claude should:
+
+1. **Read the daily log** to see current + pending tasks (all views):
+   ```bash
+   node ~/projects/currentProjects/entries/app/backend/statusline.js
+   ```
+
+2. **Analyze the conversation** to determine:
+   - **Title**: concise task description (what was worked on)
+   - **Context**: which context code applies (proj, cul, prof, per, etc.)
+   - **Summary**: 1-2 sentence summary of work done
+   - **Start time**: estimate when the conversation/work started (ask user if unclear)
+   - **End time**: current time (now)
+
+3. **Match against existing tasks** — check current task and all pending tasks (routine + novel). Look for semantic alignment between the conversation topic and task titles.
+
+4. **Call the CLI** with the match result:
+   ```bash
+   node ~/projects/currentProjects/entries/app/backend/daily-log-cli.js log-session '{"title":"...","context":"proj","summary":"...","startedAt":"2026-02-08T05:00:00Z","endedAt":"2026-02-08T07:00:00Z","match":"current"}'
+   ```
+
+   The `match` field determines how the session is recorded:
+   - `"current"` — session matches the current task (adds session to it)
+   - `N` (number) — matches pending task N (all-tasks view, 1-indexed, adds session + time)
+   - `"new"` — no match found, creates a new pending task with the session
+
+5. **Report back** what was logged.
+
+**Session log files** are stored in `tracking/sessions/session-YYYY-MM-DD.json` with conversation summaries, timestamps, and task match info.
+
+**Calendar integration**: Sessions are automatically pushed to Google Calendar as events.
+
+**Estimating start time**: If the conversation context makes it clear when work started (e.g., "I've been working on this for 2 hours"), use that. Otherwise, ask the user. Don't guess wildly — a reasonable estimate is better than no log.
+
+**Task matching heuristics**:
+- Current task title contains keywords from the conversation topic → `"current"`
+- A pending task title semantically matches → use that task's number
+- Multiple potential matches → ask user which one
+- No match at all → `"new"` (creates a fresh pending task)
+
 ### End of Day Update Format
 
 **IMPORTANT: For Cultivo Slack updates, ALWAYS use this format:**

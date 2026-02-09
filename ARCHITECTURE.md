@@ -164,14 +164,31 @@ CREATE TABLE journal_metadata (
 
 ### Google Calendar Sync
 
-Completed task blocks are automatically pushed to a dedicated **"Time Tracking"** Google Calendar as color-coded events.
+Task sessions are automatically pushed to a dedicated **"Time Tracking"** Google Calendar as color-coded events, with bidirectional sync support.
 
-**How it works:**
-- On task completion (`/t c-N`, `/t cs-N`, `/t c-0`), a calendar event is created
-- Event spans `completedAt - timeSpent` → `completedAt` (reflects total work time)
+**Session tracking:**
+- Every task (current, pending, completed) has a `sessions` array
+- Each session: `{ startedAt, endedAt, calendarEventId }`
+- A session is recorded every time a task is paused, switched, or completed
+- Tasks worked on multiple times create multiple calendar events (one per session)
+- Sessions carry over when a task is resumed from pending
+
+**How push works:**
+- On every session end (pause, switch, complete, auto-pause), a calendar event is created
+- Event spans `startedAt` → `endedAt` (actual wall-clock session time)
 - Events are color-coded by context (see color map below)
-- Calendar event ID is stored as `calendarEventId` on the completed entry
-- Push is fire-and-forget — calendar failures don't block task completion
+- `calendarEventId` is stored on the session object for bidirectional sync
+- Push is fire-and-forget — calendar failures don't block task operations
+
+**Bidirectional sync (`/t sync`):**
+- **Push**: Sessions without `calendarEventId` get pushed to Google Calendar
+- **Pull**: Sessions with `calendarEventId` are compared against the calendar — if times differ, **calendar wins** and local session times are updated
+- **Import**: Calendar events with no local match are imported — matched to routine/pending tasks by title, then logged as completedWork with sessions. Context is inferred from matched task, title-to-context aliases (e.g. "fitness" → health), or calendar color.
+- Deleted calendar events clear the local `calendarEventId` reference
+- `timeSpent` on tasks is recalculated when calendar times change
+- Adjacent-day logs are checked to prevent cross-midnight duplicates
+- `/t start` auto-syncs yesterday before archiving
+- `/t sync yesterday` syncs both yesterday and today
 
 **Context → Calendar color mapping:**
 
@@ -190,7 +207,7 @@ Completed task blocks are automatically pushed to a dedicated **"Time Tracking"*
 2. `node app/backend/daily-log-cli.js init-gcal` — Creates calendar, saves `GOOGLE_CALENDAR_ID` to `.env`
 
 **Key files:**
-- `app/backend/google-calendar.js` — Calendar API helper (token refresh, event creation)
+- `app/backend/google-calendar.js` — Calendar API helper (token refresh, event CRUD, list events)
 - `.env` — `GOOGLE_CALENDAR_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`
 
 ### Contexts
@@ -206,6 +223,22 @@ Tasks and time are tracked across 7 contexts:
 | Projects | `proj` | 🚀 | Earning |
 | Health | `heal` | 💪 | Neutral |
 | Unstructured | `us` | ☀️ | Spending |
+
+### Unstructured Mode & Time Reassignment
+
+When entering unstructured mode (via `/t us`, idle auto-pause, or task checker pause), the view automatically switches to **routine tasks, all contexts**. This lets you quickly reference routine tasks by number.
+
+**Reassign unstructured time:** `/t last-N` replaces the current unstructured block with task N:
+- Logs the time to `completedWork` attributed to the referenced task
+- Adds a session + time to the pending task
+- Pushes to Google Calendar with the task's context color
+- Starts a fresh unstructured block afterward
+
+**Example flow:**
+1. Working on "Fix bug" → idle detected → auto-paused to unstructured
+2. Come back, see routine tasks: `1. transit [R]  2. meals [R]  3. sleeping [R]`
+3. `/t last-1` → reassigns unstructured time to "transit"
+4. `/t -N` to switch to your next real task
 
 ### Routine vs Novel Tasks
 
@@ -365,8 +398,11 @@ tail -20 tracking/idle-monitor/task-checker.log
 | `/t per\|soc\|prof\|cul\|proj\|heal\|us` | Filter by context |
 | `/t all` | Clear context filter |
 | `/t jira` | Pull assigned Jira tickets |
+| `/t sync` | Sync sessions with Google Calendar (bidirectional) |
+| `/t sync yesterday` | Sync yesterday + today |
+| `/t last-N` | Reassign unstructured time to task N |
 | `/t p` | Pause current task |
 
 ---
 
-**Last Updated:** 2026-02-07
+**Last Updated:** 2026-02-08

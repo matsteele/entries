@@ -10,6 +10,8 @@
 
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+const { createCalendarEvent } = require('./google-calendar');
 
 // Constants
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
@@ -175,6 +177,21 @@ function autoPauseTask(logData, endTime) {
   const elapsedMinutes = Math.round(diffMs / 60000);
   const timeSpent = (currentTask.timeSpent || 0) + elapsedMinutes;
 
+  // Record session for the paused task
+  const session = { startedAt: currentTask.startedAt, endedAt: endTimeISO };
+  try {
+    const idleEventId = createCalendarEvent({
+      title: currentTask.title,
+      activityContext: currentTask.activityContext,
+      timeSpent: elapsedMinutes,
+      category: currentTask.isContextOnly ? 'Context' : categorizeWork(currentTask.title),
+      details: { startedAt: currentTask.startedAt, completedAt: endTimeISO }
+    });
+    if (idleEventId) session.calendarEventId = idleEventId;
+  } catch (e) {
+    // Calendar push is fire-and-forget
+  }
+
   if (currentTask.isContextOnly) {
     // Context-only: log time to completedWork
     logData.dailyLog.completedWork.push({
@@ -184,7 +201,8 @@ function autoPauseTask(logData, endTime) {
       title: currentTask.title,
       activityContext: currentTask.activityContext,
       timeSpent: timeSpent,
-      details: { startedAt: currentTask.startedAt, completedAt: endTimeISO }
+      details: { startedAt: currentTask.startedAt, completedAt: endTimeISO },
+      sessions: [...(currentTask.sessions || []), session]
     });
   } else {
     // Regular task: move to pending with auto-pause note
@@ -198,7 +216,8 @@ function autoPauseTask(logData, endTime) {
       notes: [...(currentTask.notes || []), {
         text: 'Auto-paused (idle detected)',
         timestamp: endTimeISO
-      }]
+      }],
+      sessions: [...(currentTask.sessions || []), session]
     };
     if (currentTask.routine) pendingEntry.routine = true;
     if (currentTask.jiraTicket) pendingEntry.jiraTicket = currentTask.jiraTicket;
@@ -208,14 +227,17 @@ function autoPauseTask(logData, endTime) {
   }
 
   // Switch to unstructured context-only tracking starting at heartbeat time
+  // Show all contexts + routine view so user can /t last-N to reassign
   logData.dailyLog.currentTask = {
     title: 'unstructured',
     activityContext: 'unstructured',
     startedAt: endTimeISO,
     timeSpent: 0,
-    isContextOnly: true
+    isContextOnly: true,
+    sessions: []
   };
-  logData.dailyLog.contextFilter = 'unstructured';
+  logData.dailyLog.contextFilter = null;
+  logData.dailyLog.viewMode = 'routine';
 }
 
 function log(message) {
@@ -274,9 +296,11 @@ function main() {
               activityContext: 'unstructured',
               startedAt: lastHeartbeat.toISOString(),
               timeSpent: 0,
-              isContextOnly: true
+              isContextOnly: true,
+              sessions: []
             };
-            todayLog.dailyLog.contextFilter = 'unstructured';
+            todayLog.dailyLog.contextFilter = null;
+            todayLog.dailyLog.viewMode = 'routine';
             saveDailyLog(todayLog);
           }
         }

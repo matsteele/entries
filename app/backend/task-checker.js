@@ -13,6 +13,8 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+const { createCalendarEvent } = require('./google-calendar');
 
 // Constants
 const MIN_ELAPSED_MINUTES = 5;  // Don't show popup if task started < 5 min ago
@@ -250,12 +252,27 @@ function performTaskSwitch(logData, pendingTasks, selectedIndex) {
   const actualIndex = allPending.indexOf(selectedTask);
   if (actualIndex === -1) return false;
 
-  // Move current task to pending (with accumulated time)
+  // Move current task to pending (with accumulated time and session tracking)
   const currentTask = logData.dailyLog.currentTask;
   if (currentTask) {
     const startTime = new Date(currentTask.startedAt);
     const elapsedMinutes = Math.round((new Date() - startTime) / 60000);
     const timeSpent = (currentTask.timeSpent || 0) + elapsedMinutes;
+
+    // Record session
+    const session = { startedAt: currentTask.startedAt, endedAt: timestamp };
+    try {
+      const switchEventId = createCalendarEvent({
+        title: currentTask.title,
+        activityContext: currentTask.activityContext,
+        timeSpent: elapsedMinutes,
+        category: currentTask.isContextOnly ? 'Context' : categorizeWork(currentTask.title),
+        details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+      });
+      if (switchEventId) session.calendarEventId = switchEventId;
+    } catch (e) {
+      // Calendar push is fire-and-forget
+    }
 
     if (currentTask.isContextOnly) {
       logData.dailyLog.completedWork.push({
@@ -265,7 +282,8 @@ function performTaskSwitch(logData, pendingTasks, selectedIndex) {
         title: currentTask.title,
         activityContext: currentTask.activityContext,
         timeSpent: timeSpent,
-        details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+        details: { startedAt: currentTask.startedAt, completedAt: timestamp },
+        sessions: [...(currentTask.sessions || []), session]
       });
     } else {
       const pendingEntry = {
@@ -278,7 +296,8 @@ function performTaskSwitch(logData, pendingTasks, selectedIndex) {
         notes: [...(currentTask.notes || []), {
           text: 'Switched via task check-in',
           timestamp: timestamp
-        }]
+        }],
+        sessions: [...(currentTask.sessions || []), session]
       };
       if (currentTask.routine) pendingEntry.routine = true;
       if (currentTask.jiraTicket) pendingEntry.jiraTicket = currentTask.jiraTicket;
@@ -297,6 +316,7 @@ function performTaskSwitch(logData, pendingTasks, selectedIndex) {
     activityContext: selectedTask.activityContext || 'professional',
     timeSpent: selectedTask.timeSpent || 0,
     notes: selectedTask.notes || [],
+    sessions: selectedTask.sessions || [],  // Carry over sessions
     isContextOnly: false
   };
   if (selectedTask.routine) logData.dailyLog.currentTask.routine = true;
@@ -316,6 +336,21 @@ function performPause(logData) {
   const elapsedMinutes = Math.round((new Date() - startTime) / 60000);
   const timeSpent = (currentTask.timeSpent || 0) + elapsedMinutes;
 
+  // Record session
+  const session = { startedAt: currentTask.startedAt, endedAt: timestamp };
+  try {
+    const pauseEventId = createCalendarEvent({
+      title: currentTask.title,
+      activityContext: currentTask.activityContext,
+      timeSpent: elapsedMinutes,
+      category: currentTask.isContextOnly ? 'Context' : categorizeWork(currentTask.title),
+      details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+    });
+    if (pauseEventId) session.calendarEventId = pauseEventId;
+  } catch (e) {
+    // Calendar push is fire-and-forget
+  }
+
   if (currentTask.isContextOnly) {
     logData.dailyLog.completedWork.push({
       id: generateId(),
@@ -324,7 +359,8 @@ function performPause(logData) {
       title: currentTask.title,
       activityContext: currentTask.activityContext,
       timeSpent: timeSpent,
-      details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+      details: { startedAt: currentTask.startedAt, completedAt: timestamp },
+      sessions: [...(currentTask.sessions || []), session]
     });
   } else {
     const pendingEntry = {
@@ -337,7 +373,8 @@ function performPause(logData) {
       notes: [...(currentTask.notes || []), {
         text: 'Paused via task check-in',
         timestamp: timestamp
-      }]
+      }],
+      sessions: [...(currentTask.sessions || []), session]
     };
     if (currentTask.routine) pendingEntry.routine = true;
     if (currentTask.jiraTicket) pendingEntry.jiraTicket = currentTask.jiraTicket;
@@ -350,9 +387,12 @@ function performPause(logData) {
     activityContext: 'unstructured',
     startedAt: timestamp,
     timeSpent: 0,
-    isContextOnly: true
+    isContextOnly: true,
+    sessions: []
   };
-  logData.dailyLog.contextFilter = 'unstructured';
+  // Show all contexts + routine view so user can /t last-N to reassign
+  logData.dailyLog.contextFilter = null;
+  logData.dailyLog.viewMode = 'routine';
 }
 
 // --- Logging ---

@@ -184,9 +184,109 @@ function createTimeTrackingCalendar() {
   }
 }
 
+/**
+ * List events from the Time Tracking calendar for a date range.
+ * @param {string} timeMin - ISO datetime for range start
+ * @param {string} timeMax - ISO datetime for range end
+ * @returns {Array} Array of Google Calendar event objects, or empty array
+ */
+function listCalendarEvents(timeMin, timeMax) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId) return [];
+
+  const accessToken = getCalendarAccessToken();
+  if (!accessToken) return [];
+
+  try {
+    const params = new URLSearchParams({
+      timeMin,
+      timeMax,
+      singleEvents: 'true',
+      maxResults: '500',
+      orderBy: 'startTime'
+    });
+
+    const response = execSync(
+      `curl -s "https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}" ` +
+      `-H "Authorization: Bearer ${accessToken}"`,
+      { encoding: 'utf8' }
+    );
+
+    const result = JSON.parse(response);
+    return result.items || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Update an existing calendar event's times.
+ * @param {string} eventId - Google Calendar event ID
+ * @param {Object} updates - { startTime, endTime } as ISO strings
+ * @returns {boolean} true on success
+ */
+function updateCalendarEvent(eventId, updates) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId || !eventId) return false;
+
+  const accessToken = getCalendarAccessToken();
+  if (!accessToken) return false;
+
+  try {
+    const patchData = {};
+    if (updates.startTime) patchData.start = { dateTime: updates.startTime };
+    if (updates.endTime) patchData.end = { dateTime: updates.endTime };
+    if (updates.summary) patchData.summary = updates.summary;
+    if (updates.colorId) patchData.colorId = updates.colorId;
+
+    const patchJson = JSON.stringify(patchData);
+
+    const response = execSync(
+      `curl -s -X PATCH "https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}" ` +
+      `-H "Authorization: Bearer ${accessToken}" ` +
+      `-H "Content-Type: application/json" ` +
+      `-d '${patchJson.replace(/'/g, "'\\''")}'`,
+      { encoding: 'utf8' }
+    );
+
+    const result = JSON.parse(response);
+    return !!result.id;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Delete a calendar event.
+ * @param {string} eventId - Google Calendar event ID
+ * @returns {boolean} true on success
+ */
+function deleteCalendarEvent(eventId) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId || !eventId) return false;
+
+  const accessToken = getCalendarAccessToken();
+  if (!accessToken) return false;
+
+  try {
+    execSync(
+      `curl -s -X DELETE "https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}" ` +
+      `-H "Authorization: Bearer ${accessToken}"`,
+      { encoding: 'utf8' }
+    );
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 module.exports = {
   getCalendarAccessToken,
   createCalendarEvent,
   createTimeTrackingCalendar,
-  CONTEXT_COLOR_MAP
+  listCalendarEvents,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+  CONTEXT_COLOR_MAP,
+  CONTEXT_EMOJI_MAP
 };
