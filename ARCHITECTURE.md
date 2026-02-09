@@ -184,7 +184,7 @@ Task sessions are automatically pushed to a dedicated **"Time Tracking"** Google
 - **Push**: Sessions without `calendarEventId` get pushed to Google Calendar
 - **Pull**: Sessions with `calendarEventId` are compared against the calendar — if times differ, **calendar wins** and local session times are updated
 - **Import**: Calendar events with no local match are imported — matched to routine/pending tasks by title, then logged as completedWork with sessions. Context is inferred from matched task, title-to-context aliases (e.g. "fitness" → health), or calendar color.
-- Deleted calendar events clear the local `calendarEventId` reference
+- **Delete**: Deleted calendar events remove the local session and deduct its time; completedWork entries with no remaining sessions are removed entirely
 - `timeSpent` on tasks is recalculated when calendar times change
 - Adjacent-day logs are checked to prevent cross-midnight duplicates
 - `/t start` auto-syncs yesterday before archiving

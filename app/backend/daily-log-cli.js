@@ -2224,6 +2224,7 @@ function syncCalendar(dates = [TODAY], quiet = false) {
   let totalPushed = 0;
   let totalPulled = 0;
   let totalUpdated = 0;
+  let totalDeleted = 0;
 
   for (const date of dates) {
     const logData = loadDailyLog(date);
@@ -2288,13 +2289,97 @@ function syncCalendar(dates = [TODAY], quiet = false) {
 
     const calEvents = listCalendarEvents(dayStart.toISOString(), dayEnd.toISOString());
 
-    if (calEvents.length > 0) {
-      // Build map: eventId → calendar event
-      const calEventMap = new Map();
-      for (const ev of calEvents) {
-        calEventMap.set(ev.id, ev);
+    // Build map: eventId → calendar event (may be empty if all events deleted)
+    const calEventMap = new Map();
+    for (const ev of calEvents) {
+      calEventMap.set(ev.id, ev);
+    }
+
+    // Reconcile existing synced sessions (always run — detects deletions even when calendar is empty)
+    const syncedRefs = allSessionRefs.filter(r => r.session.calendarEventId);
+    const sessionsToDelete = [];
+    for (const ref of syncedRefs) {
+      const { session } = ref;
+      const calEvent = calEventMap.get(session.calendarEventId);
+
+      if (!calEvent) {
+        // Event was deleted from calendar — schedule session for removal
+        const duration = Math.round((new Date(session.endedAt) - new Date(session.startedAt)) / 60000);
+        sessionsToDelete.push({
+          source: ref.source,
+          sessionIdx: ref.sessionIdx,
+          item: ref.item,
+          duration,
+          title: ref.item.title,
+          context: ref.item.activityContext
+        });
+        continue;
       }
 
+      // Compare times (calendar wins)
+      const calStart = calEvent.start?.dateTime;
+      const calEnd = calEvent.end?.dateTime;
+      if (!calStart || !calEnd) continue;
+
+      // Normalize to compare — truncate to seconds (Google Calendar drops milliseconds)
+      const truncSec = (iso) => iso.replace(/\.\d{3}Z$/, '.000Z');
+      const localStart = truncSec(new Date(session.startedAt).toISOString());
+      const localEnd = truncSec(new Date(session.endedAt).toISOString());
+      const remoteStart = truncSec(new Date(calStart).toISOString());
+      const remoteEnd = truncSec(new Date(calEnd).toISOString());
+
+      if (localStart !== remoteStart || localEnd !== remoteEnd) {
+        // Calendar was modified — update local session
+        const oldDuration = Math.round((new Date(session.endedAt) - new Date(session.startedAt)) / 60000);
+        session.startedAt = remoteStart;
+        session.endedAt = remoteEnd;
+        const newDuration = Math.round((new Date(remoteEnd) - new Date(remoteStart)) / 60000);
+        const timeDiff = newDuration - oldDuration;
+
+        // Update the task's total timeSpent
+        ref.item.timeSpent = (ref.item.timeSpent || 0) + timeDiff;
+        if (ref.item.timeSpent < 0) ref.item.timeSpent = 0;
+
+        modified = true;
+        totalUpdated++;
+
+        if (!quiet) {
+          const emoji = CONTEXT_EMOJI_MAP[ref.item.activityContext] || '💼';
+          console.log(`   ${emoji} ${ref.item.title}: ${oldDuration}m → ${newDuration}m (calendar)`);
+        }
+      }
+    }
+
+    // Apply session deletions (reverse order to preserve indices within same item)
+    if (sessionsToDelete.length > 0) {
+      sessionsToDelete.sort((a, b) => b.sessionIdx - a.sessionIdx);
+      const affectedItems = new Set();
+      for (const del of sessionsToDelete) {
+        const { item, sessionIdx, duration } = del;
+        if (item.sessions) {
+          item.sessions.splice(sessionIdx, 1);
+        }
+        item.timeSpent = Math.max(0, (item.timeSpent || 0) - duration);
+        if (del.source === 'completedWork') affectedItems.add(item);
+
+        if (!quiet) {
+          const emoji = CONTEXT_EMOJI_MAP[del.context] || '💼';
+          console.log(`   ${emoji} ${del.title}: -${duration}m (deleted from calendar)`);
+        }
+        totalDeleted++;
+        modified = true;
+      }
+
+      // Remove completedWork entries that lost all their sessions
+      if (affectedItems.size > 0) {
+        logData.dailyLog.completedWork = (logData.dailyLog.completedWork || []).filter(item => {
+          if (!affectedItems.has(item)) return true;
+          return item.sessions && item.sessions.length > 0;
+        });
+      }
+    }
+
+    if (calEvents.length > 0) {
       // Collect all local calendarEventIds (from sessions AND top-level item fields)
       // Also scan adjacent days to avoid cross-midnight duplicates
       const localEventIds = new Set();
@@ -2327,53 +2412,6 @@ function syncCalendar(dates = [TODAY], quiet = false) {
       nextDate.setDate(nextDate.getDate() + 1);
       collectIdsFromLog(loadDailyLog(getLocalDate(prevDate)));
       collectIdsFromLog(loadDailyLog(getLocalDate(nextDate)));
-
-      // Reconcile existing synced sessions
-      const syncedRefs = allSessionRefs.filter(r => r.session.calendarEventId);
-      for (const ref of syncedRefs) {
-        const { session } = ref;
-        const calEvent = calEventMap.get(session.calendarEventId);
-
-        if (!calEvent) {
-          // Event was deleted from calendar — clear the reference
-          delete session.calendarEventId;
-          modified = true;
-          continue;
-        }
-
-        // Compare times (calendar wins)
-        const calStart = calEvent.start?.dateTime;
-        const calEnd = calEvent.end?.dateTime;
-        if (!calStart || !calEnd) continue;
-
-        // Normalize to compare — truncate to seconds (Google Calendar drops milliseconds)
-        const truncSec = (iso) => iso.replace(/\.\d{3}Z$/, '.000Z');
-        const localStart = truncSec(new Date(session.startedAt).toISOString());
-        const localEnd = truncSec(new Date(session.endedAt).toISOString());
-        const remoteStart = truncSec(new Date(calStart).toISOString());
-        const remoteEnd = truncSec(new Date(calEnd).toISOString());
-
-        if (localStart !== remoteStart || localEnd !== remoteEnd) {
-          // Calendar was modified — update local session
-          const oldDuration = Math.round((new Date(session.endedAt) - new Date(session.startedAt)) / 60000);
-          session.startedAt = remoteStart;
-          session.endedAt = remoteEnd;
-          const newDuration = Math.round((new Date(remoteEnd) - new Date(remoteStart)) / 60000);
-          const timeDiff = newDuration - oldDuration;
-
-          // Update the task's total timeSpent
-          ref.item.timeSpent = (ref.item.timeSpent || 0) + timeDiff;
-          if (ref.item.timeSpent < 0) ref.item.timeSpent = 0;
-
-          modified = true;
-          totalUpdated++;
-
-          if (!quiet) {
-            const emoji = CONTEXT_EMOJI_MAP[ref.item.activityContext] || '💼';
-            console.log(`   ${emoji} ${ref.item.title}: ${oldDuration}m → ${newDuration}m (calendar)`);
-          }
-        }
-      }
 
       // --- IMPORT: calendar events not tracked locally ---
       const untrackedEvents = calEvents.filter(ev => {
@@ -2500,7 +2538,8 @@ function syncCalendar(dates = [TODAY], quiet = false) {
     if (totalPushed > 0) parts.push(`${totalPushed} pushed`);
     if (totalPulled > 0) parts.push(`${totalPulled} imported from calendar`);
     if (totalUpdated > 0) parts.push(`${totalUpdated} updated from calendar`);
-    if (totalPushed === 0 && totalPulled === 0 && totalUpdated === 0) parts.push('already in sync');
+    if (totalDeleted > 0) parts.push(`${totalDeleted} deleted (removed from calendar)`);
+    if (totalPushed === 0 && totalPulled === 0 && totalUpdated === 0 && totalDeleted === 0) parts.push('already in sync');
     console.log(`   ✅ ${parts.join(', ')}\n`);
   }
 }
@@ -3044,6 +3083,543 @@ function pullGoogleTasks() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// REST PROGRAM - Sleep Tracking
+// ═══════════════════════════════════════════════════════════════
+
+const SLEEP_DIR = path.join(BASE_DIR, 'tracking', 'sleep');
+const STRATEGIES_FILE = path.join(SLEEP_DIR, 'strategies.json');
+
+function loadStrategies() {
+  if (fs.existsSync(STRATEGIES_FILE)) {
+    return JSON.parse(fs.readFileSync(STRATEGIES_FILE, 'utf8')).strategies;
+  }
+  return [];
+}
+
+function loadSleepLog(date = TODAY) {
+  const filePath = path.join(SLEEP_DIR, `sleep-log-${date}.json`);
+  if (fs.existsSync(filePath)) {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  }
+  return null;
+}
+
+function saveSleepLog(sleepData) {
+  if (!fs.existsSync(SLEEP_DIR)) {
+    fs.mkdirSync(SLEEP_DIR, { recursive: true });
+  }
+  const filePath = path.join(SLEEP_DIR, `sleep-log-${sleepData.date}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(sleepData, null, 2), 'utf8');
+}
+
+function displayBedtimeProtocol() {
+  console.log('\n🌙 Bedtime Protocol');
+  console.log('────────────────────');
+  console.log('  ☐ Phone at door/desk (Home is Sacred)');
+  console.log('  ☐ No screens in bed');
+  console.log('  ☐ Room dark & cool');
+  console.log('  ☐ Meditation / breathing');
+  console.log('  ☐ Gratitude reflection');
+  console.log('  ☐ Supplements if planned');
+}
+
+function displayMorningProtocol() {
+  console.log('\n🌅 Morning Protocol');
+  console.log('────────────────────');
+  console.log('  ☐ Hydrate (glass of water)');
+  console.log('  ☐ Morning writing (5-min stream of consciousness)');
+  console.log('  ☐ Plan the day');
+  console.log('  ☐ Leave home');
+}
+
+function displayStrategies(strategies, selectedIds = []) {
+  const selectedSet = new Set(selectedIds);
+  strategies.forEach(s => {
+    const check = selectedSet.has(s.id) ? ' ✓' : '';
+    const pad = s.id < 10 ? ' ' : '';
+    console.log(`  ${pad}${s.id}. ${s.name}${check}`);
+  });
+}
+
+function parseStrategyInput(input, strategies) {
+  if (!input || input.trim() === '') return [];
+  const ids = input.split(',')
+    .map(s => parseInt(s.trim()))
+    .filter(n => !isNaN(n) && strategies.some(s => s.id === n));
+  return [...new Set(ids)]; // deduplicate
+}
+
+/**
+ * /t rest - Enter rest mode
+ * Pauses current task, switches to sleeping, shows bedtime protocol,
+ * prompts for strategy selection via interactive terminal input.
+ */
+function enterRestMode() {
+  const readline = require('readline');
+  const logData = loadDailyLog();
+  const timestamp = new Date().toISOString();
+  const strategies = loadStrategies();
+
+  // Step 1: Pause current task if it's not already sleeping
+  if (logData.dailyLog.currentTask) {
+    const prevTask = logData.dailyLog.currentTask;
+
+    // If already on sleeping task, just show protocol
+    if (prevTask.title === 'sleeping' && prevTask.routine) {
+      console.log('\n😴 Already in rest mode.');
+      displayBedtimeProtocol();
+      // Still prompt for strategies
+      promptForStrategies(strategies, logData, timestamp);
+      return;
+    }
+
+    // Pause the current task (same logic as pauseCurrentTask)
+    const elapsedMinutes = calculateElapsedMinutes(prevTask.startedAt);
+    const timeSpent = (prevTask.timeSpent || 0) + elapsedMinutes;
+    const sessionEndTime = timestamp;
+    const session = { startedAt: prevTask.startedAt, endedAt: sessionEndTime };
+
+    // Push session to Google Calendar
+    const sessionEvent = createCalendarEvent({
+      title: prevTask.title,
+      activityContext: prevTask.activityContext,
+      timeSpent: elapsedMinutes,
+      category: prevTask.isContextOnly ? 'Context' : categorizeWork(prevTask.title),
+      details: { startedAt: prevTask.startedAt, completedAt: sessionEndTime }
+    });
+    if (sessionEvent) session.calendarEventId = sessionEvent;
+
+    if (prevTask.isContextOnly) {
+      const completedEntry = {
+        id: generateId(),
+        timestamp: sessionEndTime,
+        category: 'Context',
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        timeSpent: timeSpent,
+        details: { startedAt: prevTask.startedAt, completedAt: sessionEndTime },
+        sessions: [...(prevTask.sessions || []), session]
+      };
+      logData.dailyLog.completedWork.push(completedEntry);
+    } else {
+      const pendingEntry = {
+        id: generateId(),
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        category: categorizeWork(prevTask.title),
+        priority: 'medium',
+        timeSpent: timeSpent,
+        notes: prevTask.notes || [],
+        sessions: [...(prevTask.sessions || []), session]
+      };
+      if (prevTask.routine) pendingEntry.routine = true;
+      if (prevTask.jiraTicket) pendingEntry.jiraTicket = prevTask.jiraTicket;
+      if (prevTask.jiraUrl) pendingEntry.jiraUrl = prevTask.jiraUrl;
+      logData.dailyLog.pendingTasks.push(pendingEntry);
+    }
+
+    const contextEmoji = CONTEXT_EMOJI_MAP[prevTask.activityContext] || '💼';
+    const timeStr = formatTimeSpent(timeSpent);
+    console.log(`\n⏸️  Paused: ${contextEmoji} ${prevTask.title} (${timeStr})`);
+  }
+
+  // Step 2: Find or create sleeping routine task, set as current
+  let sleepTask = null;
+  let sleepTaskIndex = -1;
+  logData.dailyLog.pendingTasks.forEach((task, i) => {
+    if (task.title === 'sleeping' && task.routine) {
+      sleepTask = task;
+      sleepTaskIndex = i;
+    }
+  });
+
+  if (sleepTask && sleepTaskIndex >= 0) {
+    // Remove from pending
+    logData.dailyLog.pendingTasks.splice(sleepTaskIndex, 1);
+    logData.dailyLog.currentTask = {
+      title: 'sleeping',
+      startedAt: timestamp,
+      context: 'sleeping',
+      activityContext: 'health',
+      timeSpent: sleepTask.timeSpent || 0,
+      notes: sleepTask.notes || [],
+      sessions: sleepTask.sessions || [],
+      isContextOnly: false,
+      routine: true
+    };
+  } else {
+    // No sleeping task found, create one
+    logData.dailyLog.currentTask = {
+      title: 'sleeping',
+      startedAt: timestamp,
+      context: 'sleeping',
+      activityContext: 'health',
+      timeSpent: 0,
+      notes: [],
+      sessions: [],
+      isContextOnly: false,
+      routine: true
+    };
+  }
+
+  logData.dailyLog.contextFilter = 'health';
+  saveDailyLog(logData);
+
+  // Step 3: Display bedtime protocol
+  displayBedtimeProtocol();
+
+  // Step 4: Interactive strategy selection
+  promptForStrategies(strategies, logData, timestamp);
+}
+
+function promptForStrategies(strategies, logData, timestamp) {
+  const readline = require('readline');
+
+  console.log('\nSelect sleep strategies (comma-separated numbers, Enter to skip):');
+  displayStrategies(strategies);
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  rl.question('\n> ', (answer) => {
+    const selectedIds = parseStrategyInput(answer, strategies);
+    const selectedNames = selectedIds.map(id => strategies.find(s => s.id === id)?.name).filter(Boolean);
+    const medicationStrategies = selectedIds
+      .map(id => strategies.find(s => s.id === id))
+      .filter(s => s && (s.category === 'medication' || s.category === 'supplement'));
+
+    // Create sleep log entry
+    const sleepLog = {
+      date: TODAY,
+      restStarted: timestamp,
+      wakeTime: null,
+      durationMinutes: null,
+      quality: null,
+      notes: null,
+      strategies: {
+        planned: selectedIds,
+        actual: [...selectedIds] // will be updated at wake
+      },
+      strategiesUsed: selectedNames,
+      medicationUsed: medicationStrategies.some(s => s.category === 'medication'),
+      supplementsUsed: medicationStrategies.filter(s => s.category === 'supplement').map(s => s.name)
+    };
+
+    saveSleepLog(sleepLog);
+
+    if (selectedNames.length > 0) {
+      console.log(`\n😴 Rest mode started. Selected: ${selectedNames.join(', ')}`);
+    } else {
+      console.log('\n😴 Rest mode started.');
+    }
+    console.log('💤 Good night! Run /t wake when you get up.\n');
+
+    rl.close();
+  });
+}
+
+/**
+ * /t wake - Exit rest mode
+ * Records wake time, prompts for quality and strategy review,
+ * saves complete sleep record, shows morning protocol.
+ */
+function exitRestMode() {
+  const readline = require('readline');
+  const logData = loadDailyLog();
+  const wakeTime = new Date();
+  const wakeTimestamp = wakeTime.toISOString();
+  const strategies = loadStrategies();
+
+  // Load sleep log (might be from yesterday if sleeping past midnight)
+  let sleepLog = loadSleepLog(TODAY);
+  if (!sleepLog) {
+    // Check yesterday
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+    sleepLog = loadSleepLog(yStr);
+  }
+
+  if (!sleepLog || !sleepLog.restStarted) {
+    // No /t rest was run, create a minimal record
+    console.log('\n⚠️  No /t rest record found. Creating wake-only record.');
+    sleepLog = {
+      date: TODAY,
+      restStarted: null,
+      wakeTime: wakeTimestamp,
+      durationMinutes: null,
+      quality: null,
+      notes: null,
+      strategies: { planned: [], actual: [] },
+      strategiesUsed: [],
+      medicationUsed: false,
+      supplementsUsed: []
+    };
+  }
+
+  // Calculate duration
+  let durationMinutes = null;
+  if (sleepLog.restStarted) {
+    const restStart = new Date(sleepLog.restStarted);
+    durationMinutes = Math.round((wakeTime - restStart) / 60000);
+  }
+
+  // Display summary
+  console.log('\n☀️  Good morning! Sleep summary:');
+  console.log('────────────────────────────────');
+  if (sleepLog.restStarted) {
+    const restTime = new Date(sleepLog.restStarted);
+    console.log(`  Went to bed: ${restTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+  }
+  console.log(`  Woke up:     ${wakeTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+  if (durationMinutes) {
+    console.log(`  Duration:    ${formatTimeSpent(durationMinutes)}`);
+  }
+
+  // Show planned strategies
+  if (sleepLog.strategiesUsed && sleepLog.strategiesUsed.length > 0) {
+    console.log(`\n  Strategies planned: ${sleepLog.strategiesUsed.join(', ')}`);
+  }
+
+  // Interactive prompts
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  rl.question('\nSleep quality (1-5, 5=excellent): ', (qualityAnswer) => {
+    const quality = parseInt(qualityAnswer);
+    const validQuality = (!isNaN(quality) && quality >= 1 && quality <= 5) ? quality : null;
+
+    // Show strategies for review/addition
+    const plannedIds = sleepLog.strategies?.planned || [];
+    console.log('\nStrategies used at bedtime:');
+    displayStrategies(strategies, plannedIds);
+
+    rl.question('\nAdd more strategies? (comma-separated numbers, Enter to keep as-is): ', (stratAnswer) => {
+      let actualIds = [...plannedIds];
+      const additionalIds = parseStrategyInput(stratAnswer, strategies);
+      if (additionalIds.length > 0) {
+        actualIds = [...new Set([...actualIds, ...additionalIds])];
+      }
+
+      const actualNames = actualIds.map(id => strategies.find(s => s.id === id)?.name).filter(Boolean);
+      const medicationStrategies = actualIds
+        .map(id => strategies.find(s => s.id === id))
+        .filter(s => s && (s.category === 'medication' || s.category === 'supplement'));
+
+      rl.question('\nNotes (Enter to skip): ', (notesAnswer) => {
+        const notes = notesAnswer.trim() || null;
+
+        // Update sleep log
+        sleepLog.wakeTime = wakeTimestamp;
+        sleepLog.durationMinutes = durationMinutes;
+        sleepLog.quality = validQuality;
+        sleepLog.notes = notes;
+        sleepLog.strategies.actual = actualIds;
+        sleepLog.strategiesUsed = actualNames;
+        sleepLog.medicationUsed = medicationStrategies.some(s => s.category === 'medication');
+        sleepLog.supplementsUsed = medicationStrategies.filter(s => s.category === 'supplement').map(s => s.name);
+
+        saveSleepLog(sleepLog);
+
+        // Pause the sleeping task (move back to pending)
+        if (logData.dailyLog.currentTask && logData.dailyLog.currentTask.title === 'sleeping') {
+          const sleepingTask = logData.dailyLog.currentTask;
+          const elapsedMinutes = calculateElapsedMinutes(sleepingTask.startedAt);
+          const timeSpent = (sleepingTask.timeSpent || 0) + elapsedMinutes;
+          const sessionEndTime = wakeTimestamp;
+          const session = { startedAt: sleepingTask.startedAt, endedAt: sessionEndTime };
+
+          // Push sleep session to Google Calendar
+          const sessionEvent = createCalendarEvent({
+            title: 'sleeping',
+            activityContext: 'health',
+            timeSpent: elapsedMinutes,
+            category: 'Routine',
+            details: { startedAt: sleepingTask.startedAt, completedAt: sessionEndTime }
+          });
+          if (sessionEvent) session.calendarEventId = sessionEvent;
+
+          const pendingEntry = {
+            id: generateId(),
+            title: 'sleeping',
+            activityContext: 'health',
+            category: 'General',
+            priority: 'medium',
+            timeSpent: timeSpent,
+            notes: sleepingTask.notes || [],
+            sessions: [...(sleepingTask.sessions || []), session],
+            routine: true
+          };
+
+          logData.dailyLog.pendingTasks.push(pendingEntry);
+
+          // Switch to unstructured
+          logData.dailyLog.currentTask = {
+            title: 'unstructured',
+            startedAt: wakeTimestamp,
+            context: 'unstructured',
+            activityContext: 'unstructured',
+            timeSpent: 0,
+            isContextOnly: true,
+            sessions: []
+          };
+          logData.dailyLog.contextFilter = null;
+          logData.dailyLog.viewMode = 'routine';
+
+          saveDailyLog(logData);
+        }
+
+        // Output confirmation
+        const qualityStr = validQuality ? `quality ${validQuality}/5` : 'no quality rated';
+        const durationStr = durationMinutes ? formatTimeSpent(durationMinutes) : 'unknown duration';
+        console.log(`\n✅ Sleep logged: ${durationStr}, ${qualityStr}`);
+        if (actualNames.length > 0) {
+          console.log(`   Strategies: ${actualNames.join(', ')}`);
+        }
+
+        // Show morning protocol
+        displayMorningProtocol();
+        console.log('');
+
+        rl.close();
+      });
+    });
+  });
+}
+
+/**
+ * /t sleep:stats - Show sleep analytics
+ */
+function showSleepStats(days = 7) {
+  const sleepLogs = [];
+
+  // Collect sleep logs for the last N days
+  for (let i = 0; i < days; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const log = loadSleepLog(dateStr);
+    if (log && log.wakeTime) {
+      sleepLogs.push(log);
+    }
+  }
+
+  if (sleepLogs.length === 0) {
+    console.log('\n📊 No sleep data found for the last ' + days + ' days.');
+    console.log('   Use /t rest and /t wake to start tracking.\n');
+    return;
+  }
+
+  console.log(`\n📊 Sleep Report (Last ${days} days, ${sleepLogs.length} nights logged)`);
+  console.log('──────────────────────────────────────────────');
+
+  // Average duration
+  const durations = sleepLogs.filter(l => l.durationMinutes).map(l => l.durationMinutes);
+  if (durations.length > 0) {
+    const avgDuration = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+    console.log(`  Avg Duration:  ${formatTimeSpent(avgDuration)}`);
+  }
+
+  // Average quality
+  const qualities = sleepLogs.filter(l => l.quality).map(l => l.quality);
+  if (qualities.length > 0) {
+    const avgQuality = (qualities.reduce((a, b) => a + b, 0) / qualities.length).toFixed(1);
+    console.log(`  Avg Quality:   ${avgQuality}/5`);
+  }
+
+  // Average bedtime
+  const bedtimes = sleepLogs.filter(l => l.restStarted).map(l => new Date(l.restStarted));
+  if (bedtimes.length > 0) {
+    // Average minutes past midnight (handling cross-midnight)
+    const minutesPastMidnight = bedtimes.map(d => {
+      let mins = d.getHours() * 60 + d.getMinutes();
+      if (mins < 720) mins += 1440; // after midnight = next day
+      return mins;
+    });
+    const avgMinutes = Math.round(minutesPastMidnight.reduce((a, b) => a + b, 0) / minutesPastMidnight.length) % 1440;
+    const avgH = Math.floor(avgMinutes / 60);
+    const avgM = avgMinutes % 60;
+    const period = avgH >= 12 ? 'PM' : 'AM';
+    const displayH = avgH > 12 ? avgH - 12 : (avgH === 0 ? 12 : avgH);
+    console.log(`  Avg Bedtime:   ${displayH}:${String(avgM).padStart(2, '0')} ${period}`);
+  }
+
+  // Average wake time
+  const wakeTimes = sleepLogs.filter(l => l.wakeTime).map(l => new Date(l.wakeTime));
+  if (wakeTimes.length > 0) {
+    const wakeMinutes = wakeTimes.map(d => d.getHours() * 60 + d.getMinutes());
+    const avgWake = Math.round(wakeMinutes.reduce((a, b) => a + b, 0) / wakeMinutes.length);
+    const wH = Math.floor(avgWake / 60);
+    const wM = avgWake % 60;
+    const wPeriod = wH >= 12 ? 'PM' : 'AM';
+    const wDisplayH = wH > 12 ? wH - 12 : (wH === 0 ? 12 : wH);
+    console.log(`  Avg Wake:      ${wDisplayH}:${String(wM).padStart(2, '0')} ${wPeriod}`);
+  }
+
+  // Best and worst nights
+  if (qualities.length > 0) {
+    const bestLog = sleepLogs.reduce((best, l) => (l.quality && (!best || l.quality > best.quality)) ? l : best, null);
+    const worstLog = sleepLogs.reduce((worst, l) => (l.quality && (!worst || l.quality < worst.quality)) ? l : worst, null);
+
+    if (bestLog) {
+      const bestDate = new Date(bestLog.date + 'T12:00:00');
+      const bestDateStr = bestDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const bestDur = bestLog.durationMinutes ? formatTimeSpent(bestLog.durationMinutes) : '?';
+      console.log(`\n  Best night:    ${bestDateStr} (${bestDur}, quality ${bestLog.quality})`);
+    }
+    if (worstLog && worstLog !== bestLog) {
+      const worstDate = new Date(worstLog.date + 'T12:00:00');
+      const worstDateStr = worstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const worstDur = worstLog.durationMinutes ? formatTimeSpent(worstLog.durationMinutes) : '?';
+      console.log(`  Worst night:   ${worstDateStr} (${worstDur}, quality ${worstLog.quality})`);
+    }
+  }
+
+  // Strategy effectiveness
+  const strategies = loadStrategies();
+  const strategyStats = {};
+  sleepLogs.forEach(log => {
+    const actualIds = log.strategies?.actual || [];
+    actualIds.forEach(id => {
+      const s = strategies.find(st => st.id === id);
+      if (s && log.quality) {
+        if (!strategyStats[s.name]) {
+          strategyStats[s.name] = { totalQuality: 0, count: 0 };
+        }
+        strategyStats[s.name].totalQuality += log.quality;
+        strategyStats[s.name].count++;
+      }
+    });
+  });
+
+  const sortedStrategies = Object.entries(strategyStats)
+    .map(([name, stats]) => ({ name, avgQuality: (stats.totalQuality / stats.count).toFixed(1), count: stats.count }))
+    .sort((a, b) => b.avgQuality - a.avgQuality);
+
+  if (sortedStrategies.length > 0) {
+    console.log('\n  Strategy effectiveness:');
+    sortedStrategies.forEach(s => {
+      console.log(`    ${s.name}: avg quality ${s.avgQuality} (used ${s.count}x)`);
+    });
+  }
+
+  // Medication usage
+  const medNights = sleepLogs.filter(l => l.medicationUsed).length;
+  const suppNights = sleepLogs.filter(l => l.supplementsUsed && l.supplementsUsed.length > 0).length;
+  if (medNights > 0 || suppNights > 0) {
+    console.log('\n  Aid usage:');
+    if (medNights > 0) console.log(`    Medication: ${medNights}/${sleepLogs.length} nights`);
+    if (suppNights > 0) console.log(`    Supplements: ${suppNights}/${sleepLogs.length} nights`);
+  }
+
+  console.log('');
+}
+
 function showUsage() {
   console.log(`
 Daily Log CLI - Track your work progress
@@ -3501,6 +4077,18 @@ try {
 
     case 'all':
       clearContextFilter();
+      break;
+
+    case 'rest':
+      enterRestMode();
+      break;
+
+    case 'wake':
+      exitRestMode();
+      break;
+
+    case 'sleep:stats':
+      showSleepStats(args.length > 0 ? parseInt(args[0]) || 7 : 7);
       break;
 
     default:

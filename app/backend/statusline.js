@@ -189,8 +189,9 @@ if (pendingTasks.length > 0) {
     const color = CONTEXT_COLORS[contextFilter] || CONTEXT_COLORS.professional;
     const emoji = CONTEXT_EMOJI[contextFilter] || '💼';
     
-    // Colored box with context name
-    console.log(`\n${color}${BLACK}${BOLD} ${emoji} ${contextName.toUpperCase()} ${RESET}`);
+    // Colored box with context name and mode indicator
+    const modeTag = viewMode === 'routine' ? ' [R]' : ' [N]';
+    console.log(`\n${color}${BLACK}${BOLD} ${emoji} ${contextName.toUpperCase()}${modeTag} ${RESET}`);
     if (contextTotalTime > 0) {
       console.log(`Total time: ${BROWN}${formatTimeSpent(contextTotalTime)}${RESET}`);
     }
@@ -232,8 +233,9 @@ if (pendingTasks.length > 0) {
     const color = CONTEXT_COLORS[contextFilter] || CONTEXT_COLORS.professional;
     const emoji = CONTEXT_EMOJI[contextFilter] || '💼';
     
-    // Colored box with context name
-    console.log(`\n${color}${BLACK}${BOLD} ${emoji} ${contextName.toUpperCase()} ${RESET}`);
+    // Colored box with context name and mode indicator
+    const modeTag2 = viewMode === 'routine' ? ' [R]' : ' [N]';
+    console.log(`\n${color}${BLACK}${BOLD} ${emoji} ${contextName.toUpperCase()}${modeTag2} ${RESET}`);
     if (contextTotalTime > 0) {
       console.log(`Total time: ${BROWN}${formatTimeSpent(contextTotalTime)}${RESET}`);
     }
