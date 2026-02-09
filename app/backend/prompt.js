@@ -63,8 +63,8 @@ function loadDailyLog() {
 // Main
 const log = loadDailyLog();
 
-if (!log || !log.dailyLog || !log.dailyLog.currentTask || log.dailyLog.currentTask.isContextOnly) {
-  // No current task or it's just a context filter - output nothing
+if (!log || !log.dailyLog || !log.dailyLog.currentTask) {
+  // No current task - output nothing
   process.exit(0);
 }
 
@@ -72,8 +72,17 @@ const currentTask = log.dailyLog.currentTask;
 const context = currentTask.activityContext || 'professional';
 const contextName = CONTEXT_NAMES[context] || context;
 const contextColor = CONTEXT_COLORS[context] || CONTEXT_COLORS.professional;
-const taskTitle = currentTask.title;
 
-// Output: [context: task name] with colored background
-console.log(`${contextColor}${BLACK}${BOLD}[${contextName}: ${taskTitle}]${RESET}`);
+// For context-only tasks, show just the context
+// For regular tasks, show [context: task name]
+if (currentTask.isContextOnly) {
+  // Context-only mode: show emoji + context name only
+  const contextEmojis = { personal: '🏠', social: '👥', professional: '💼', cultivo: '🌱', projects: '🚀', health: '💪', unstructured: '☀️' };
+  const emoji = contextEmojis[context] || '💼';
+  console.log(`${contextColor}${BLACK}${BOLD}[${emoji} ${contextName}]${RESET}`);
+} else {
+  // Regular task: show [context: task name]
+  const taskTitle = currentTask.title;
+  console.log(`${contextColor}${BLACK}${BOLD}[${contextName}: ${taskTitle}]${RESET}`);
+}
 
