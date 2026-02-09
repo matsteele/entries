@@ -8,7 +8,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 
 const fs = require('fs');
 const path = require('path');
-const { createCalendarEvent, createTimeTrackingCalendar } = require('./google-calendar');
+const { createCalendarEvent, createTimeTrackingCalendar, listCalendarEvents, CONTEXT_COLOR_MAP } = require('./google-calendar');
 
 // Constants
 const BASE_DIR = path.join(__dirname, '..', '..');
@@ -350,6 +350,17 @@ function setCurrentTask(description) {
     const elapsedMinutes = calculateElapsedMinutes(prevTask.startedAt);
     const timeSpent = (prevTask.timeSpent || 0) + elapsedMinutes;
 
+    // Record final session
+    const finalSession = { startedAt: prevTask.startedAt, endedAt: timestamp };
+    const autoEventId = createCalendarEvent({
+      title: prevTask.title,
+      activityContext: prevTask.activityContext || 'professional',
+      timeSpent: elapsedMinutes,
+      category: category,
+      details: { startedAt: prevTask.startedAt, completedAt: timestamp }
+    });
+    if (autoEventId) finalSession.calendarEventId = autoEventId;
+
     const completedEntry = {
       id: generateId(),
       timestamp: timestamp,
@@ -361,7 +372,8 @@ function setCurrentTask(description) {
         startedAt: prevTask.startedAt,
         completedAt: timestamp,
         notes: prevTask.notes || []  // Preserve notes when auto-completing
-      }
+      },
+      sessions: [...(prevTask.sessions || []), finalSession]
     };
 
     if (prevTask.context && prevTask.context !== prevTask.title) {
@@ -386,7 +398,8 @@ function setCurrentTask(description) {
     context: context,
     activityContext: activityContext,
     timeSpent: 0,
-    notes: []
+    notes: [],
+    sessions: []
   };
 
   saveDailyLog(logData);
@@ -415,6 +428,19 @@ function completeCurrentTask(newTaskDescription = null) {
   const elapsedMinutes = calculateElapsedMinutes(currentTask.startedAt);
   const timeSpent = (currentTask.timeSpent || 0) + elapsedMinutes;
 
+  // Record final session
+  const finalSession = { startedAt: currentTask.startedAt, endedAt: timestamp };
+
+  // Push final session to Google Calendar (fire-and-forget)
+  const eventId = createCalendarEvent({
+    title: currentTask.title,
+    activityContext: currentTask.activityContext || 'professional',
+    timeSpent: elapsedMinutes,
+    category: category,
+    details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+  });
+  if (eventId) finalSession.calendarEventId = eventId;
+
   const completedEntry = {
     id: generateId(),
     timestamp: timestamp,
@@ -426,7 +452,8 @@ function completeCurrentTask(newTaskDescription = null) {
       startedAt: currentTask.startedAt,
       completedAt: timestamp,
       notes: currentTask.notes || []  // Preserve notes when completing
-    }
+    },
+    sessions: [...(currentTask.sessions || []), finalSession]
   };
 
   if (currentTask.context && currentTask.context !== currentTask.title) {
@@ -434,10 +461,6 @@ function completeCurrentTask(newTaskDescription = null) {
   }
 
   logData.dailyLog.completedWork.push(completedEntry);
-
-  // Push to Google Calendar (fire-and-forget)
-  const eventId = createCalendarEvent(completedEntry);
-  if (eventId) completedEntry.calendarEventId = eventId;
 
   const contextEmojiMap = CONTEXT_EMOJI_MAP;
   const contextEmoji = contextEmojiMap[completedEntry.activityContext] || '💼';
@@ -459,7 +482,8 @@ function completeCurrentTask(newTaskDescription = null) {
       context: context,
       activityContext: activityContext,
       timeSpent: 0,
-      notes: []
+      notes: [],
+      sessions: []
     };
 
     const contextEmojiMap = CONTEXT_EMOJI_MAP;
@@ -696,16 +720,29 @@ function addPendingTaskAndSwitch(description) {
     const elapsedMinutes = calculateElapsedMinutes(prevTask.startedAt);
     const timeSpent = (prevTask.timeSpent || 0) + elapsedMinutes;
 
+    // Record session for the outgoing task
+    const addSwitchEndTime = new Date().toISOString();
+    const addSwitchSession = { startedAt: prevTask.startedAt, endedAt: addSwitchEndTime };
+    const addSwitchEventId = createCalendarEvent({
+      title: prevTask.title,
+      activityContext: prevTask.activityContext,
+      timeSpent: elapsedMinutes,
+      category: prevTask.isContextOnly ? 'Context' : categorizeWork(prevTask.title),
+      details: { startedAt: prevTask.startedAt, completedAt: addSwitchEndTime }
+    });
+    if (addSwitchEventId) addSwitchSession.calendarEventId = addSwitchEventId;
+
     if (prevTask.isContextOnly) {
       // Context-only task: log time to completed work
       const completedEntry = {
         id: generateId(),
-        timestamp: new Date().toISOString(),
+        timestamp: addSwitchEndTime,
         category: 'Context',
         title: prevTask.title,
         activityContext: prevTask.activityContext,
         timeSpent: timeSpent,
-        details: { completedAt: new Date().toISOString() }
+        details: { startedAt: prevTask.startedAt, completedAt: addSwitchEndTime },
+        sessions: [...(prevTask.sessions || []), addSwitchSession]
       };
       logData.dailyLog.completedWork.push(completedEntry);
       const contextEmoji = CONTEXT_EMOJI_MAP[prevTask.activityContext] || '💼';
@@ -720,7 +757,8 @@ function addPendingTaskAndSwitch(description) {
         category: categorizeWork(prevTask.title),
         priority: 'medium',
         timeSpent: timeSpent,
-        notes: prevTask.notes || []
+        notes: prevTask.notes || [],
+        sessions: [...(prevTask.sessions || []), addSwitchSession]
       };
 
       // Preserve routine flag from current task
@@ -745,6 +783,7 @@ function addPendingTaskAndSwitch(description) {
     activityContext: activityContext,
     timeSpent: 0,
     notes: [],
+    sessions: [],
     isContextOnly: false,  // Real task, not just context tracking
     routine: isRoutine
   };
@@ -814,30 +853,53 @@ function switchToTask(taskNumber) {
 
     // If it's a context-only task, save the time to completed work instead of pending
     if (prevTask.isContextOnly) {
+      const sessionEndTime = new Date().toISOString();
+      const session = { startedAt: prevTask.startedAt, endedAt: sessionEndTime };
+
+      // Push session to Google Calendar (fire-and-forget)
+      const sessionEvent = createCalendarEvent({
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        timeSpent: elapsedMinutes,
+        category: 'Context',
+        details: { startedAt: prevTask.startedAt, completedAt: sessionEndTime }
+      });
+      if (sessionEvent) session.calendarEventId = sessionEvent;
+
       const completedEntry = {
         id: generateId(),
-        timestamp: new Date().toISOString(),
+        timestamp: sessionEndTime,
         category: 'Context',
         title: prevTask.title,
         activityContext: prevTask.activityContext,
         timeSpent: timeSpent,
         details: {
           startedAt: prevTask.startedAt,
-          completedAt: new Date().toISOString()
-        }
+          completedAt: sessionEndTime
+        },
+        sessions: [...(prevTask.sessions || []), session]
       };
       logData.dailyLog.completedWork.push(completedEntry);
-
-      // Push to Google Calendar (fire-and-forget)
-      const ctxEventId = createCalendarEvent(completedEntry);
-      if (ctxEventId) completedEntry.calendarEventId = ctxEventId;
 
       const contextEmojiMap = CONTEXT_EMOJI_MAP;
       const contextEmoji = contextEmojiMap[prevTask.activityContext] || '💼';
       const timeStr = formatTimeSpent(timeSpent);
       console.log(`\n⏸️  ${contextEmoji} ${prevTask.activityContext} context time logged: ${timeStr}`);
     } else {
-      // Regular task - move to pending
+      // Regular task - move to pending with session tracking
+      const sessionEndTime = new Date().toISOString();
+      const session = { startedAt: prevTask.startedAt, endedAt: sessionEndTime };
+
+      // Push session to Google Calendar (fire-and-forget)
+      const sessionEvent = createCalendarEvent({
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        timeSpent: elapsedMinutes,
+        category: categorizeWork(prevTask.title),
+        details: { startedAt: prevTask.startedAt, completedAt: sessionEndTime }
+      });
+      if (sessionEvent) session.calendarEventId = sessionEvent;
+
       const pendingEntry = {
         id: generateId(),
         title: prevTask.title,
@@ -845,13 +907,14 @@ function switchToTask(taskNumber) {
         category: categorizeWork(prevTask.title),
         priority: 'medium',  // Default priority when moving current to pending
         timeSpent: timeSpent,
-        notes: prevTask.notes || []  // Preserve notes when switching tasks
+        notes: prevTask.notes || [],  // Preserve notes when switching tasks
+        sessions: [...(prevTask.sessions || []), session]
       };
 
-      // Preserve routine flag
-      if (prevTask.routine) {
-        pendingEntry.routine = true;
-      }
+      // Preserve routine flag and jira fields
+      if (prevTask.routine) pendingEntry.routine = true;
+      if (prevTask.jiraTicket) pendingEntry.jiraTicket = prevTask.jiraTicket;
+      if (prevTask.jiraUrl) pendingEntry.jiraUrl = prevTask.jiraUrl;
 
       logData.dailyLog.pendingTasks.push(pendingEntry);
 
@@ -868,16 +931,23 @@ function switchToTask(taskNumber) {
   const taskTitle = pendingTask.title || pendingTask.task;
   const activityContext = pendingTask.activityContext || detectContext(taskTitle);
 
-  logData.dailyLog.currentTask = {
+  const newCurrentTask = {
     title: taskTitle,
     startedAt: timestamp,
     context: taskTitle,
     activityContext: activityContext,
     timeSpent: pendingTask.timeSpent || 0,
     notes: pendingTask.notes || [],  // Preserve notes from pending task
+    sessions: pendingTask.sessions || [],  // Carry over previous sessions
     isContextOnly: false,  // Real task, not just context tracking
     routine: pendingTask.routine || false
   };
+
+  // Carry over jira fields from pending
+  if (pendingTask.jiraTicket) newCurrentTask.jiraTicket = pendingTask.jiraTicket;
+  if (pendingTask.jiraUrl) newCurrentTask.jiraUrl = pendingTask.jiraUrl;
+
+  logData.dailyLog.currentTask = newCurrentTask;
 
   // Set context filter to match the task's context
   logData.dailyLog.contextFilter = activityContext;
@@ -933,6 +1003,7 @@ function completeTaskByNumber(taskNumber) {
   const activityContext = taskToComplete.activityContext || detectContext(taskTitle);
   const timeSpent = taskToComplete.timeSpent || 0;
 
+  // Pending task completion — no active session, carry over previous sessions
   const completedEntry = {
     id: generateId(),
     timestamp: timestamp,
@@ -942,15 +1013,12 @@ function completeTaskByNumber(taskNumber) {
     timeSpent: timeSpent,
     details: {
       completedAt: timestamp
-    }
+    },
+    sessions: taskToComplete.sessions || []
   };
 
   logData.dailyLog.completedWork.push(completedEntry);
   logData.dailyLog.pendingTasks.splice(actualIndex, 1);
-
-  // Push to Google Calendar (fire-and-forget)
-  const eventId = createCalendarEvent(completedEntry);
-  if (eventId) completedEntry.calendarEventId = eventId;
 
   saveDailyLog(logData);
 
@@ -998,6 +1066,17 @@ function completeBulkTasks(taskNumbersStr) {
         const elapsedMinutes = calculateElapsedMinutes(currentTask.startedAt);
         const timeSpent = (currentTask.timeSpent || 0) + elapsedMinutes;
 
+        // Record final session
+        const finalSession = { startedAt: currentTask.startedAt, endedAt: timestamp };
+        const bulkEventId = createCalendarEvent({
+          title: currentTask.title,
+          activityContext: currentTask.activityContext || 'professional',
+          timeSpent: elapsedMinutes,
+          category: category,
+          details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+        });
+        if (bulkEventId) finalSession.calendarEventId = bulkEventId;
+
         const completedEntry = {
           id: generateId(),
           timestamp: timestamp,
@@ -1009,12 +1088,13 @@ function completeBulkTasks(taskNumbersStr) {
             startedAt: currentTask.startedAt,
             completedAt: timestamp,
             notes: currentTask.notes || []
-          }
+          },
+          sessions: [...(currentTask.sessions || []), finalSession]
         };
 
         logData.dailyLog.completedWork.push(completedEntry);
         logData.dailyLog.currentTask = null;
-        
+
         const contextEmoji = CONTEXT_EMOJI_MAP[completedEntry.activityContext] || '💼';
         completed.push(`#0 ${contextEmoji} ${currentTask.title}`);
       } else {
@@ -1054,7 +1134,8 @@ function completeBulkTasks(taskNumbersStr) {
       timeSpent: timeSpent,
       details: {
         completedAt: timestamp
-      }
+      },
+      sessions: taskToComplete.sessions || []
     };
 
     logData.dailyLog.completedWork.push(completedEntry);
@@ -1188,6 +1269,19 @@ function pauseCurrentTask(customEndTime = null, addNote = null) {
   const contextEmoji = contextEmojiMap[currentTask.activityContext] || '💼';
   const timeStr = formatTimeSpent(timeSpent);
 
+  // Record session ending at this point
+  const session = { startedAt: currentTask.startedAt, endedAt: timestamp };
+
+  // Push session to Google Calendar (fire-and-forget)
+  const pauseEventId = createCalendarEvent({
+    title: currentTask.title,
+    activityContext: currentTask.activityContext,
+    timeSpent: elapsedMinutes,
+    category: currentTask.isContextOnly ? 'Context' : categorizeWork(currentTask.title),
+    details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+  });
+  if (pauseEventId) session.calendarEventId = pauseEventId;
+
   if (currentTask.isContextOnly) {
     // Context-only task: log time to completed work, don't add to pending
     const completedEntry = {
@@ -1197,7 +1291,8 @@ function pauseCurrentTask(customEndTime = null, addNote = null) {
       title: currentTask.title,
       activityContext: currentTask.activityContext,
       timeSpent: timeSpent,
-      details: { completedAt: timestamp }
+      details: { startedAt: currentTask.startedAt, completedAt: timestamp },
+      sessions: [...(currentTask.sessions || []), session]
     };
     logData.dailyLog.completedWork.push(completedEntry);
     logData.dailyLog.currentTask = null;
@@ -1211,7 +1306,8 @@ function pauseCurrentTask(customEndTime = null, addNote = null) {
       category: categorizeWork(currentTask.title),
       priority: 'medium',
       timeSpent: timeSpent,
-      notes: notes
+      notes: notes,
+      sessions: [...(currentTask.sessions || []), session]
     };
 
     // Preserve routine flag
@@ -1239,6 +1335,243 @@ function pauseCurrentTaskWithNote() {
   pauseCurrentTask(null, 'Auto-paused (laptop sleep)');
 }
 
+/**
+ * Reassign unstructured time to a task referenced by number.
+ * When in unstructured context-only mode, this replaces the unstructured
+ * time block with the referenced task. The view defaults to routine + all
+ * contexts when entering unstructured, so task numbers reference routine tasks.
+ *
+ * Usage: /t last-N  (where N is a task number from the current view)
+ *
+ * Behavior:
+ * - Routine task: logs time to completedWork, adds session to pending task
+ * - Novel task: logs time to completedWork, adds session to pending task
+ * - Starts a fresh unstructured block afterward
+ */
+function reassignUnstructuredTime(taskNumber) {
+  const logData = loadDailyLog();
+  const timestamp = new Date().toISOString();
+
+  // Must be in unstructured context-only mode
+  const currentTask = logData.dailyLog.currentTask;
+  if (!currentTask || !currentTask.isContextOnly || currentTask.activityContext !== 'unstructured') {
+    console.error('\n❌ /t last-N only works when in unstructured mode.\n');
+    process.exit(1);
+  }
+
+  // Resolve task number from current view (routine view, all contexts)
+  const viewMode = logData.dailyLog.viewMode || 'novel';
+  const contextFilter = logData.dailyLog.contextFilter || null;
+  const pendingTasks = getDisplayOrderedTasks(logData.dailyLog.pendingTasks, contextFilter, viewMode);
+
+  const taskIndex = taskNumber - 1;
+  if (taskIndex < 0 || taskIndex >= pendingTasks.length) {
+    console.error(`\n❌ Invalid task number. You have ${pendingTasks.length} tasks in the current view.\n`);
+    process.exit(1);
+  }
+
+  const targetTask = pendingTasks[taskIndex];
+  const actualIndex = logData.dailyLog.pendingTasks.indexOf(targetTask);
+
+  // Calculate time for the unstructured block
+  const blockStart = currentTask.startedAt;
+  const blockEnd = timestamp;
+  const elapsedMinutes = calculateElapsedMinutesUntil(blockStart, new Date());
+
+  // Allow 0 minutes (just started) — the time block is still valid
+  if (elapsedMinutes < 0) {
+    console.error('\n❌ No unstructured time to reassign.\n');
+    process.exit(1);
+  }
+
+  // Create a session for this time block
+  const session = { startedAt: blockStart, endedAt: blockEnd };
+
+  // Push to Google Calendar as the target task (not unstructured)
+  const calEventId = createCalendarEvent({
+    title: targetTask.title,
+    activityContext: targetTask.activityContext || 'professional',
+    timeSpent: elapsedMinutes,
+    category: targetTask.routine ? 'Routine' : categorizeWork(targetTask.title),
+    details: { startedAt: blockStart, completedAt: blockEnd }
+  });
+  if (calEventId) session.calendarEventId = calEventId;
+
+  // Log to completedWork
+  logData.dailyLog.completedWork.push({
+    id: generateId(),
+    timestamp: blockEnd,
+    category: targetTask.routine ? 'Routine' : categorizeWork(targetTask.title),
+    title: targetTask.title,
+    activityContext: targetTask.activityContext || 'professional',
+    timeSpent: elapsedMinutes,
+    details: { startedAt: blockStart, completedAt: blockEnd },
+    sessions: [session]
+  });
+
+  // Add session and time to the pending task too
+  if (actualIndex !== -1) {
+    const pending = logData.dailyLog.pendingTasks[actualIndex];
+    pending.timeSpent = (pending.timeSpent || 0) + elapsedMinutes;
+    if (!pending.sessions) pending.sessions = [];
+    pending.sessions.push(session);
+  }
+
+  // Start a fresh unstructured block
+  logData.dailyLog.currentTask = {
+    title: 'unstructured',
+    activityContext: 'unstructured',
+    startedAt: timestamp,
+    timeSpent: 0,
+    isContextOnly: true,
+    sessions: []
+  };
+
+  saveDailyLog(logData);
+
+  const contextEmoji = CONTEXT_EMOJI_MAP[targetTask.activityContext] || '💼';
+  const timeStr = formatTimeSpent(elapsedMinutes);
+  const routineTag = targetTask.routine ? ' [R]' : '';
+  console.log(`\n✅ Reassigned ${timeStr} → ${contextEmoji} ${targetTask.title}${routineTag}`);
+  console.log(`   ☀️  Fresh unstructured block started\n`);
+}
+
+/**
+ * Log a Claude conversation session as tracked work.
+ * Called by Claude (not terminal) — takes JSON with session details.
+ *
+ * @param {string} sessionJson - JSON string with:
+ *   title: Task title (required)
+ *   context: Context code e.g. "proj", "cul" (required)
+ *   summary: Brief summary of work done (required)
+ *   startedAt: ISO timestamp for session start (required)
+ *   endedAt: ISO timestamp for session end (required)
+ *   match: "current" | taskNumber (1-indexed) | "new" (required)
+ *     - "current": session matches current task
+ *     - number > 0: matches pending task N (all tasks view, no filter)
+ *     - "new": no match, create new pending task
+ */
+function logSession(sessionJson) {
+  let data;
+  try {
+    data = JSON.parse(sessionJson);
+  } catch (e) {
+    console.error('\n❌ Invalid JSON for log-session\n');
+    process.exit(1);
+  }
+
+  const { title, summary, startedAt, endedAt } = data;
+  const context = data.context ? normalizeContext(data.context) : 'professional';
+  const match = data.match;
+
+  if (!title || !startedAt || !endedAt) {
+    console.error('\n❌ Required fields: title, startedAt, endedAt\n');
+    process.exit(1);
+  }
+
+  const logData = loadDailyLog();
+  const now = new Date().toISOString();
+  const elapsedMs = new Date(endedAt) - new Date(startedAt);
+  const elapsedMinutes = Math.max(0, Math.round(elapsedMs / 60000));
+
+  // Create session object
+  const session = { startedAt, endedAt };
+
+  // Push to Google Calendar (fire-and-forget)
+  try {
+    const calEventId = createCalendarEvent({
+      title,
+      activityContext: context,
+      timeSpent: elapsedMinutes,
+      category: categorizeWork(title),
+      details: { startedAt, completedAt: endedAt }
+    });
+    if (calEventId) session.calendarEventId = calEventId;
+  } catch (e) {
+    // fire-and-forget
+  }
+
+  let matchType = 'new';
+  let matchedTitle = null;
+
+  if (match === 'current' && logData.dailyLog.currentTask) {
+    // Add session to current task
+    const cur = logData.dailyLog.currentTask;
+    if (!cur.sessions) cur.sessions = [];
+    cur.sessions.push(session);
+    matchedTitle = cur.title;
+    matchType = 'current';
+
+  } else if (typeof match === 'number' && match > 0) {
+    // Match pending task by index (all tasks, no view filter)
+    const all = logData.dailyLog.pendingTasks;
+    const display = getDisplayOrderedTasks(all, null, null);
+    const idx = match - 1;
+    if (idx >= 0 && idx < display.length) {
+      const task = display[idx];
+      const realIdx = all.indexOf(task);
+      if (realIdx !== -1) {
+        all[realIdx].timeSpent = (all[realIdx].timeSpent || 0) + elapsedMinutes;
+        if (!all[realIdx].sessions) all[realIdx].sessions = [];
+        all[realIdx].sessions.push(session);
+        matchedTitle = task.title;
+        matchType = task.routine ? 'routine' : 'pending';
+      }
+    } else {
+      console.error(`\n❌ Task ${match} not found (${display.length} tasks available)\n`);
+      process.exit(1);
+    }
+
+  } else {
+    // No match — create new pending task
+    logData.dailyLog.pendingTasks.push({
+      id: generateId(),
+      title,
+      activityContext: context,
+      category: categorizeWork(title),
+      priority: 'medium',
+      timeSpent: elapsedMinutes,
+      sessions: [session],
+      notes: [{ text: 'Logged from Claude session', timestamp: now }]
+    });
+    matchedTitle = title;
+    matchType = 'new';
+  }
+
+  // Write session log file
+  const sessionsDir = path.join(BASE_DIR, 'tracking', 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const sessionFile = path.join(sessionsDir, `session-${TODAY}.json`);
+
+  let sessionLog = { date: TODAY, sessions: [] };
+  if (fs.existsSync(sessionFile)) {
+    try { sessionLog = JSON.parse(fs.readFileSync(sessionFile, 'utf8')); } catch (e) {}
+  }
+
+  sessionLog.sessions.push({
+    id: generateId(),
+    title,
+    context,
+    summary: summary || '',
+    startedAt,
+    endedAt,
+    loggedAt: now,
+    matchedTask: matchedTitle,
+    matchType,
+    calendarEventId: session.calendarEventId || null
+  });
+
+  fs.writeFileSync(sessionFile, JSON.stringify(sessionLog, null, 2), 'utf8');
+  saveDailyLog(logData);
+
+  const emoji = CONTEXT_EMOJI_MAP[context] || '💼';
+  const timeStr = formatTimeSpent(elapsedMinutes);
+  console.log(`\n📝 Session logged: ${emoji} ${title} (${timeStr})`);
+  console.log(`   ${matchType === 'new' ? '➕ Created new task' : matchType === 'current' ? '🎯 Added to current task' : '📌 Added to: ' + matchedTitle}`);
+  if (summary) console.log(`   📄 ${summary.substring(0, 120)}${summary.length > 120 ? '...' : ''}`);
+  console.log('');
+}
+
 function completeCurrentAndSwitch(taskNumber) {
   const logData = loadDailyLog();
   const timestamp = new Date().toISOString();
@@ -1254,6 +1587,19 @@ function completeCurrentAndSwitch(taskNumber) {
   const elapsedMinutes = calculateElapsedMinutes(currentTask.startedAt);
   const timeSpent = (currentTask.timeSpent || 0) + elapsedMinutes;
 
+  // Record final session for the completing task
+  const finalSession = { startedAt: currentTask.startedAt, endedAt: timestamp };
+
+  // Push final session to Google Calendar (fire-and-forget)
+  const calEventId = createCalendarEvent({
+    title: currentTask.title,
+    activityContext: currentTask.activityContext || 'professional',
+    timeSpent: elapsedMinutes,
+    category: category,
+    details: { startedAt: currentTask.startedAt, completedAt: timestamp }
+  });
+  if (calEventId) finalSession.calendarEventId = calEventId;
+
   const completedEntry = {
     id: generateId(),
     timestamp: timestamp,
@@ -1265,7 +1611,8 @@ function completeCurrentAndSwitch(taskNumber) {
       startedAt: currentTask.startedAt,
       completedAt: timestamp,
       notes: currentTask.notes || []
-    }
+    },
+    sessions: [...(currentTask.sessions || []), finalSession]
   };
 
   if (currentTask.context && currentTask.context !== currentTask.title) {
@@ -1273,10 +1620,6 @@ function completeCurrentAndSwitch(taskNumber) {
   }
 
   logData.dailyLog.completedWork.push(completedEntry);
-
-  // Push to Google Calendar (fire-and-forget)
-  const calEventId = createCalendarEvent(completedEntry);
-  if (calEventId) completedEntry.calendarEventId = calEventId;
 
   const contextEmojiMap = CONTEXT_EMOJI_MAP;
   const contextEmoji = contextEmojiMap[completedEntry.activityContext] || '💼';
@@ -1304,7 +1647,8 @@ function completeCurrentAndSwitch(taskNumber) {
     context: pendingTask.title || pendingTask.task,
     activityContext: activityContext,
     timeSpent: pendingTask.timeSpent || 0,
-    notes: pendingTask.notes || []
+    notes: pendingTask.notes || [],
+    sessions: pendingTask.sessions || []  // Carry over sessions from pending
   };
 
   saveDailyLog(logData);
@@ -1507,10 +1851,71 @@ function modifyTaskContext(taskNumber, newContextCode) {
 
 function clearContextFilter() {
   const logData = loadDailyLog();
+  const timestamp = new Date().toISOString();
+
+  // If there's a current task, move it to pending (unless it's a context-only task)
+  if (logData.dailyLog.currentTask) {
+    const prevTask = logData.dailyLog.currentTask;
+    const elapsedMinutes = calculateElapsedMinutes(prevTask.startedAt);
+    const timeSpent = (prevTask.timeSpent || 0) + elapsedMinutes;
+
+    // Record session for outgoing task
+    const sessionEvent = { startedAt: prevTask.startedAt, endedAt: timestamp };
+    const eventId = createCalendarEvent({
+      title: prevTask.title,
+      activityContext: prevTask.activityContext,
+      timeSpent: elapsedMinutes,
+      category: prevTask.isContextOnly ? 'Context' : categorizeWork(prevTask.title),
+      details: { startedAt: prevTask.startedAt, completedAt: timestamp }
+    });
+    if (eventId) sessionEvent.calendarEventId = eventId;
+
+    if (prevTask.isContextOnly) {
+      // Context-only task: log to completed work
+      const completedEntry = {
+        id: generateId(),
+        timestamp: timestamp,
+        category: 'Context',
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        timeSpent: timeSpent,
+        details: { startedAt: prevTask.startedAt, completedAt: timestamp },
+        sessions: [...(prevTask.sessions || []), sessionEvent]
+      };
+      logData.dailyLog.completedWork.push(completedEntry);
+    } else {
+      // Regular task: move to pending
+      const pendingEntry = {
+        id: generateId(),
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        category: categorizeWork(prevTask.title),
+        priority: 'medium',
+        timeSpent: timeSpent,
+        notes: prevTask.notes || [],
+        sessions: [...(prevTask.sessions || []), sessionEvent]
+      };
+
+      logData.dailyLog.pendingTasks.push(pendingEntry);
+    }
+  }
+
+  // Switch to unstructured context (shows all tasks in routine view)
+  logData.dailyLog.currentTask = {
+    title: 'unstructured',
+    activityContext: 'unstructured',
+    startedAt: timestamp,
+    timeSpent: 0,
+    isContextOnly: true,
+    sessions: []
+  };
   logData.dailyLog.contextFilter = null;
+  logData.dailyLog.viewMode = 'routine';
+
   saveDailyLog(logData);
 
-  console.log(`\n✅ Context filter cleared. Showing all tasks (${logData.dailyLog.pendingTasks.length} total)\n`);
+  const routineTasks = logData.dailyLog.pendingTasks.filter(t => t.routine === true);
+  console.log(`\n☀️ UNSTRUCTURED — showing all tasks (${routineTasks.length} routine task(s) visible, use /t last-N to reassign)\n`);
 }
 
 function switchToContext(contextCode) {
@@ -1524,8 +1929,32 @@ function switchToContext(contextCode) {
     const elapsedMinutes = calculateElapsedMinutes(prevTask.startedAt);
     const timeSpent = (prevTask.timeSpent || 0) + elapsedMinutes;
 
-    // Only move to pending if it's not a context-only task
-    if (!prevTask.isContextOnly) {
+    // Record session for outgoing task
+    const ctxSwitchSession = { startedAt: prevTask.startedAt, endedAt: timestamp };
+    const ctxSwitchEventId = createCalendarEvent({
+      title: prevTask.title,
+      activityContext: prevTask.activityContext,
+      timeSpent: elapsedMinutes,
+      category: prevTask.isContextOnly ? 'Context' : categorizeWork(prevTask.title),
+      details: { startedAt: prevTask.startedAt, completedAt: timestamp }
+    });
+    if (ctxSwitchEventId) ctxSwitchSession.calendarEventId = ctxSwitchEventId;
+
+    if (prevTask.isContextOnly) {
+      // Context-only task: log to completed work
+      const completedEntry = {
+        id: generateId(),
+        timestamp: timestamp,
+        category: 'Context',
+        title: prevTask.title,
+        activityContext: prevTask.activityContext,
+        timeSpent: timeSpent,
+        details: { startedAt: prevTask.startedAt, completedAt: timestamp },
+        sessions: [...(prevTask.sessions || []), ctxSwitchSession]
+      };
+      logData.dailyLog.completedWork.push(completedEntry);
+    } else {
+      // Regular task: move to pending
       const pendingEntry = {
         id: generateId(),
         title: prevTask.title,
@@ -1533,7 +1962,8 @@ function switchToContext(contextCode) {
         category: categorizeWork(prevTask.title),
         priority: 'medium',
         timeSpent: timeSpent,
-        notes: prevTask.notes || []
+        notes: prevTask.notes || [],
+        sessions: [...(prevTask.sessions || []), ctxSwitchSession]
       };
 
       logData.dailyLog.pendingTasks.push(pendingEntry);
@@ -1551,17 +1981,30 @@ function switchToContext(contextCode) {
     activityContext: context,
     startedAt: timestamp,
     timeSpent: 0,
-    isContextOnly: true
+    isContextOnly: true,
+    sessions: []
   };
-  logData.dailyLog.contextFilter = context;
+  // When entering unstructured, show all contexts + routine view
+  // so user can quickly reference routine tasks with /t last-N
+  if (context === 'unstructured') {
+    logData.dailyLog.contextFilter = null;
+    logData.dailyLog.viewMode = 'routine';
+  } else {
+    logData.dailyLog.contextFilter = context;
+  }
 
   saveDailyLog(logData);
 
   const contextEmoji = CONTEXT_EMOJI_MAP[context] || '💼';
-  const filteredTasks = logData.dailyLog.pendingTasks.filter(t =>
-    (t.activityContext || 'professional') === context
-  );
-  console.log(`\n${contextEmoji} ${context.toUpperCase()} — tracking time (${filteredTasks.length} task(s))\n`);
+  if (context === 'unstructured') {
+    const routineTasks = logData.dailyLog.pendingTasks.filter(t => t.routine === true);
+    console.log(`\n${contextEmoji} UNSTRUCTURED — tracking time (${routineTasks.length} routine task(s) visible, use /t last-N to reassign)\n`);
+  } else {
+    const filteredTasks = logData.dailyLog.pendingTasks.filter(t =>
+      (t.activityContext || 'professional') === context
+    );
+    console.log(`\n${contextEmoji} ${context.toUpperCase()} — tracking time (${filteredTasks.length} task(s))\n`);
+  }
 }
 
 function calculateTimeByContext(log) {
@@ -1763,9 +2206,313 @@ function findLastAvailableDay() {
   return files.length > 0 ? files[0] : null;
 }
 
+/**
+ * Sync sessions with Google Calendar (bidirectional).
+ * - Push: sessions without calendarEventId → create events
+ * - Pull: sessions with calendarEventId → fetch from calendar, update local if times differ (calendar wins)
+ * @param {string[]} dates - Array of date strings (YYYY-MM-DD) to sync
+ * @param {boolean} quiet - If true, minimal output (for auto-sync on start/end)
+ */
+function syncCalendar(dates = [TODAY], quiet = false) {
+  if (!process.env.GOOGLE_CALENDAR_ID) {
+    if (!quiet) console.log('\n⚠️  No GOOGLE_CALENDAR_ID set. Run setup-gcal and init-gcal first.\n');
+    return;
+  }
+
+  if (!quiet) console.log('\n🔄 Syncing with Google Calendar...');
+
+  let totalPushed = 0;
+  let totalPulled = 0;
+  let totalUpdated = 0;
+
+  for (const date of dates) {
+    const logData = loadDailyLog(date);
+    if (!logData) continue;
+
+    let modified = false;
+
+    // Collect all session-bearing items: completedWork, pendingTasks, currentTask
+    const sessionItems = [];
+
+    (logData.dailyLog.completedWork || []).forEach((item, idx) => {
+      sessionItems.push({ source: 'completedWork', index: idx, item });
+    });
+    (logData.dailyLog.pendingTasks || []).forEach((item, idx) => {
+      sessionItems.push({ source: 'pendingTasks', index: idx, item });
+    });
+    if (logData.dailyLog.currentTask) {
+      sessionItems.push({ source: 'currentTask', index: 0, item: logData.dailyLog.currentTask });
+    }
+
+    // Gather all sessions and their calendarEventIds
+    const allSessionRefs = []; // { itemRef, sessionIdx, session }
+    for (const ref of sessionItems) {
+      const sessions = ref.item.sessions || [];
+      sessions.forEach((session, sIdx) => {
+        allSessionRefs.push({ ...ref, sessionIdx: sIdx, session });
+      });
+    }
+
+    // --- PUSH: sessions without calendarEventId ---
+    const unsynced = allSessionRefs.filter(r => !r.session.calendarEventId);
+    for (const ref of unsynced) {
+      const { item, session } = ref;
+      if (!session.startedAt || !session.endedAt) continue;
+
+      const durationMs = new Date(session.endedAt) - new Date(session.startedAt);
+      const durationMin = Math.round(durationMs / 60000);
+      if (durationMin < 1) continue; // Skip sub-minute sessions
+
+      const eventId = createCalendarEvent({
+        title: item.title,
+        activityContext: item.activityContext,
+        timeSpent: durationMin,
+        category: item.category || 'General',
+        details: { startedAt: session.startedAt, completedAt: session.endedAt }
+      });
+
+      if (eventId) {
+        session.calendarEventId = eventId;
+        modified = true;
+        totalPushed++;
+      }
+    }
+
+    // --- PULL: fetch calendar events and reconcile ---
+    // Determine time range for this date
+    const dayStart = new Date(`${date}T00:00:00`);
+    const dayEnd = new Date(`${date}T23:59:59`);
+    // Extend range slightly to catch cross-midnight events
+    dayStart.setHours(dayStart.getHours() - 2);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const calEvents = listCalendarEvents(dayStart.toISOString(), dayEnd.toISOString());
+
+    if (calEvents.length > 0) {
+      // Build map: eventId → calendar event
+      const calEventMap = new Map();
+      for (const ev of calEvents) {
+        calEventMap.set(ev.id, ev);
+      }
+
+      // Collect all local calendarEventIds (from sessions AND top-level item fields)
+      // Also scan adjacent days to avoid cross-midnight duplicates
+      const localEventIds = new Set();
+      const collectIdsFromLog = (log) => {
+        if (!log) return;
+        for (const item of (log.dailyLog.completedWork || [])) {
+          if (item.calendarEventId) localEventIds.add(item.calendarEventId);
+          for (const s of (item.sessions || [])) {
+            if (s.calendarEventId) localEventIds.add(s.calendarEventId);
+          }
+        }
+        for (const item of (log.dailyLog.pendingTasks || [])) {
+          if (item.calendarEventId) localEventIds.add(item.calendarEventId);
+          for (const s of (item.sessions || [])) {
+            if (s.calendarEventId) localEventIds.add(s.calendarEventId);
+          }
+        }
+        if (log.dailyLog.currentTask) {
+          if (log.dailyLog.currentTask.calendarEventId) localEventIds.add(log.dailyLog.currentTask.calendarEventId);
+          for (const s of (log.dailyLog.currentTask.sessions || [])) {
+            if (s.calendarEventId) localEventIds.add(s.calendarEventId);
+          }
+        }
+      };
+      collectIdsFromLog(logData);
+      // Check adjacent days for cross-midnight events
+      const prevDate = new Date(`${date}T12:00:00`);
+      prevDate.setDate(prevDate.getDate() - 1);
+      const nextDate = new Date(`${date}T12:00:00`);
+      nextDate.setDate(nextDate.getDate() + 1);
+      collectIdsFromLog(loadDailyLog(getLocalDate(prevDate)));
+      collectIdsFromLog(loadDailyLog(getLocalDate(nextDate)));
+
+      // Reconcile existing synced sessions
+      const syncedRefs = allSessionRefs.filter(r => r.session.calendarEventId);
+      for (const ref of syncedRefs) {
+        const { session } = ref;
+        const calEvent = calEventMap.get(session.calendarEventId);
+
+        if (!calEvent) {
+          // Event was deleted from calendar — clear the reference
+          delete session.calendarEventId;
+          modified = true;
+          continue;
+        }
+
+        // Compare times (calendar wins)
+        const calStart = calEvent.start?.dateTime;
+        const calEnd = calEvent.end?.dateTime;
+        if (!calStart || !calEnd) continue;
+
+        // Normalize to compare — truncate to seconds (Google Calendar drops milliseconds)
+        const truncSec = (iso) => iso.replace(/\.\d{3}Z$/, '.000Z');
+        const localStart = truncSec(new Date(session.startedAt).toISOString());
+        const localEnd = truncSec(new Date(session.endedAt).toISOString());
+        const remoteStart = truncSec(new Date(calStart).toISOString());
+        const remoteEnd = truncSec(new Date(calEnd).toISOString());
+
+        if (localStart !== remoteStart || localEnd !== remoteEnd) {
+          // Calendar was modified — update local session
+          const oldDuration = Math.round((new Date(session.endedAt) - new Date(session.startedAt)) / 60000);
+          session.startedAt = remoteStart;
+          session.endedAt = remoteEnd;
+          const newDuration = Math.round((new Date(remoteEnd) - new Date(remoteStart)) / 60000);
+          const timeDiff = newDuration - oldDuration;
+
+          // Update the task's total timeSpent
+          ref.item.timeSpent = (ref.item.timeSpent || 0) + timeDiff;
+          if (ref.item.timeSpent < 0) ref.item.timeSpent = 0;
+
+          modified = true;
+          totalUpdated++;
+
+          if (!quiet) {
+            const emoji = CONTEXT_EMOJI_MAP[ref.item.activityContext] || '💼';
+            console.log(`   ${emoji} ${ref.item.title}: ${oldDuration}m → ${newDuration}m (calendar)`);
+          }
+        }
+      }
+
+      // --- IMPORT: calendar events not tracked locally ---
+      const untrackedEvents = calEvents.filter(ev => {
+        if (localEventIds.has(ev.id)) return false;
+        // Must have dateTime (skip all-day events)
+        if (!ev.start?.dateTime || !ev.end?.dateTime) return false;
+        // Must have meaningful duration
+        const durMin = Math.round((new Date(ev.end.dateTime) - new Date(ev.start.dateTime)) / 60000);
+        if (durMin < 1) return false;
+        // Only import events that START on the target date (local time)
+        const evStartLocal = new Date(ev.start.dateTime);
+        const evDateStr = `${evStartLocal.getFullYear()}-${String(evStartLocal.getMonth() + 1).padStart(2, '0')}-${String(evStartLocal.getDate()).padStart(2, '0')}`;
+        if (evDateStr !== date) return false;
+        return true;
+      });
+
+      for (const ev of untrackedEvents) {
+        const evStart = new Date(ev.start.dateTime).toISOString();
+        const evEnd = new Date(ev.end.dateTime).toISOString();
+        const durMin = Math.round((new Date(evEnd) - new Date(evStart)) / 60000);
+
+        // Strip emoji prefix from calendar summary (e.g. "🏠 transit" → "transit")
+        const rawTitle = (ev.summary || '').replace(/^[\p{Emoji}\p{Emoji_Presentation}\p{Emoji_Modifier_Base}\p{Emoji_Component}\uFE0F\u200D]+\s*/u, '').trim();
+        if (!rawTitle) continue;
+        const titleLower = rawTitle.toLowerCase();
+
+        // Match to existing task — check routine tasks first, then all pending
+        const pendingTasks = logData.dailyLog.pendingTasks || [];
+        const routineTasks = pendingTasks.filter(t => t.routine);
+        const novelTasks = pendingTasks.filter(t => !t.routine);
+
+        let matchedTask = null;
+
+        // Exact title match (case-insensitive) — routine first
+        matchedTask = routineTasks.find(t => t.title.toLowerCase() === titleLower);
+        if (!matchedTask) {
+          matchedTask = novelTasks.find(t => t.title.toLowerCase() === titleLower);
+        }
+
+        // Partial/contains match — routine first
+        if (!matchedTask) {
+          matchedTask = routineTasks.find(t =>
+            titleLower.includes(t.title.toLowerCase()) || t.title.toLowerCase().includes(titleLower)
+          );
+        }
+        if (!matchedTask) {
+          matchedTask = novelTasks.find(t =>
+            titleLower.includes(t.title.toLowerCase()) || t.title.toLowerCase().includes(titleLower)
+          );
+        }
+
+        // Determine context from matched task, title, or calendar color
+        let activityContext = 'unstructured';
+        const contextNames = ['personal', 'social', 'professional', 'cultivo', 'projects', 'health', 'unstructured'];
+        const contextAliases = {
+          fitness: 'health', exercise: 'health', sleep: 'health', sleeping: 'health',
+          meals: 'health', hygiene: 'health',
+          transit: 'personal', errands: 'personal', planning: 'personal', journaling: 'personal',
+          leisure: 'unstructured', 'social media': 'unstructured'
+        };
+
+        if (matchedTask) {
+          activityContext = matchedTask.activityContext || 'professional';
+        } else if (contextNames.includes(titleLower)) {
+          activityContext = titleLower;
+        } else if (contextAliases[titleLower]) {
+          activityContext = contextAliases[titleLower];
+        } else if (ev.colorId) {
+          // Reverse-map calendar color to context
+          const colorToContext = {};
+          for (const [ctx, cid] of Object.entries(CONTEXT_COLOR_MAP)) {
+            colorToContext[cid] = ctx;
+          }
+          activityContext = colorToContext[ev.colorId] || 'unstructured';
+        }
+
+        const session = {
+          startedAt: evStart,
+          endedAt: evEnd,
+          calendarEventId: ev.id
+        };
+
+        // Add session + time to matched pending task
+        if (matchedTask) {
+          if (!matchedTask.sessions) matchedTask.sessions = [];
+          matchedTask.sessions.push(session);
+          matchedTask.timeSpent = (matchedTask.timeSpent || 0) + durMin;
+        }
+
+        // Add completedWork entry for the time block
+        logData.dailyLog.completedWork.push({
+          id: `gcal_${ev.id}`,
+          timestamp: evEnd,
+          category: matchedTask ? (matchedTask.routine ? 'Routine' : categorizeWork(rawTitle)) : 'General',
+          title: rawTitle,
+          activityContext: activityContext,
+          timeSpent: durMin,
+          details: {
+            startedAt: evStart,
+            completedAt: evEnd,
+            notes: [{ text: 'Synced from Google Calendar', timestamp: new Date().toISOString() }]
+          },
+          sessions: [session]
+        });
+
+        modified = true;
+        totalPulled++;
+
+        if (!quiet) {
+          const emoji = CONTEXT_EMOJI_MAP[activityContext] || '💼';
+          const matchInfo = matchedTask ? `→ ${matchedTask.title}` : '(new)';
+          console.log(`   ${emoji} ${rawTitle}: ${durMin}m ${matchInfo}`);
+        }
+      }
+    }
+
+    if (modified) {
+      saveDailyLog(logData);
+    }
+  }
+
+  if (!quiet) {
+    const parts = [];
+    if (totalPushed > 0) parts.push(`${totalPushed} pushed`);
+    if (totalPulled > 0) parts.push(`${totalPulled} imported from calendar`);
+    if (totalUpdated > 0) parts.push(`${totalUpdated} updated from calendar`);
+    if (totalPushed === 0 && totalPulled === 0 && totalUpdated === 0) parts.push('already in sync');
+    console.log(`   ✅ ${parts.join(', ')}\n`);
+  }
+}
+
 function startNewDay() {
   // Find the last available day with a log file
   const lastAvailableDay = findLastAvailableDay();
+
+  // Sync yesterday's calendar data before archiving
+  if (lastAvailableDay) {
+    syncCalendar([lastAvailableDay], true);
+  }
 
   // Archive yesterday's time to weekly logs
   if (lastAvailableDay) {
@@ -1983,7 +2730,7 @@ function pullJiraTickets() {
     const jiraUrl = `https://${jiraDomain}/rest/api/3/search/jql`;
 
     const jqlPayload = JSON.stringify({
-      jql: 'assignee=currentUser() ORDER BY updated DESC',
+      jql: 'assignee=currentUser() AND status in (Ready, "In Progress") ORDER BY updated DESC',
       maxResults: 50,
       fields: ['summary', 'status', 'priority', 'issuetype', 'updated']
     });
@@ -2020,12 +2767,15 @@ function pullJiraTickets() {
     // Statuses that should not be added to pending tasks
     const excludedStatuses = ['Done', 'Deployed', "Won't Do", 'Closed'];
 
-    // Remove tasks that are now done in Jira (two-way sync)
-    console.log('🧹 Removing completed tickets from pending tasks:\n');
+    // Remove tasks that are now done in Jira and clean up stale tickets (two-way sync)
+    console.log('🧹 Cleaning up completed and stale tickets:\n');
     const initialLength = logData.dailyLog.pendingTasks.length;
 
     logData.dailyLog.pendingTasks = logData.dailyLog.pendingTasks.filter(task => {
-      if (task && task.jiraTicket && jiraTicketMap.has(task.jiraTicket)) {
+      if (!task || !task.jiraTicket) return true; // Keep non-Jira tasks
+
+      if (jiraTicketMap.has(task.jiraTicket)) {
+        // Task still exists in Jira, check if it's completed
         const jiraStatus = jiraTicketMap.get(task.jiraTicket);
         if (excludedStatuses.includes(jiraStatus)) {
           removedCount++;
@@ -2033,12 +2783,35 @@ function pullJiraTickets() {
           console.log(`   ${statusEmoji} ${task.jiraTicket}: ${task.title.replace(/^\[.*?\]\s/, '')} (${jiraStatus})`);
           return false;
         }
+      } else {
+        // Task no longer in Jira (stale) - move to completed if time spent, otherwise remove
+        if (task.timeSpent > 0) {
+          logData.dailyLog.completedWork.push({
+            id: task.id || generateId(),
+            timestamp: new Date().toISOString(),
+            title: task.title.replace(/^\[.*?\]\s/, ''),
+            activityContext: task.activityContext || 'cultivo',
+            category: task.category || 'General',
+            timeSpent: task.timeSpent,
+            jiraTicket: task.jiraTicket,
+            jiraUrl: task.jiraUrl,
+            details: {
+              completedAt: new Date().toISOString(),
+              notes: task.notes
+            }
+          });
+          console.log(`   🔄 ${task.jiraTicket}: ${task.title.replace(/^\[.*?\]\s/, '')} (moved to completed - ${task.timeSpent}m spent)`);
+        } else {
+          console.log(`   🗑️  ${task.jiraTicket}: ${task.title.replace(/^\[.*?\]\s/, '')} (removed - no time spent)`);
+        }
+        removedCount++;
+        return false;
       }
       return true;
     });
 
     if (removedCount === 0) {
-      console.log('   (no completed tickets to remove)\n');
+      console.log('   (no completed or stale tickets)\n');
     } else {
       console.log('');
     }
@@ -2102,7 +2875,7 @@ function pullJiraTickets() {
     saveDailyLog(logData);
 
     console.log(`📊 Sync complete:`);
-    console.log(`   ✅ Removed ${removedCount} completed ticket(s)`);
+    console.log(`   🧹 Cleaned up ${removedCount} completed/stale ticket(s)`);
     console.log(`   ➕ Added ${addedCount} new ticket(s)`);
     console.log(`   📋 Total pending: ${logData.dailyLog.pendingTasks.length}\n`);
 
@@ -2380,6 +3153,18 @@ try {
     process.exit(0);
   }
 
+  // Handle last-N command: reassign unstructured time to task N
+  if (command && command.startsWith('last-')) {
+    const taskNumber = parseInt(command.substring(5));
+    if (isNaN(taskNumber) || taskNumber < 1) {
+      console.error('\n❌ Invalid task number in last-N command\n');
+      console.error('   Usage: last-N (reassign unstructured time to task N)\n');
+      process.exit(1);
+    }
+    reassignUnstructuredTime(taskNumber);
+    process.exit(0);
+  }
+
   switch (command) {
     case 'start-day':
       startNewDay();
@@ -2570,6 +3355,27 @@ try {
 
     case 'pull-goog':
       pullGoogleTasks();
+      break;
+
+    case 'sync': {
+      // Sync today by default; sync yesterday too if arg provided
+      const syncDates = [TODAY];
+      if (args[0] === 'all' || args[0] === 'yesterday') {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+        syncDates.unshift(yStr);
+      }
+      syncCalendar(syncDates);
+      break;
+    }
+
+    case 'log-session':
+      if (args.length < 1) {
+        console.error('\n❌ Usage: log-session \'{"title":"...","context":"proj","summary":"...","startedAt":"ISO","endedAt":"ISO","match":"current"|N|"new"}\'\n');
+        process.exit(1);
+      }
+      logSession(args.join(' '));
       break;
 
     case 'setup-gcal': {
