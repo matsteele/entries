@@ -16,13 +16,13 @@
 │  ├─────────────────────┤        ├─────────────────────┤    │
 │  │                       │        │                       │    │
 │  │ • journals            │        │ • tracking/          │    │
-│  │ • plans               │        │   - daily-logs/      │    │
-│  │ • protocols           │        │   - time-logs/       │    │
-│  │ • journal_metadata    │        │ • plans/data/        │    │
-│  │                       │        │   (index only,       │    │
-│  │ Full narrative text   │        │    refs DB entries)   │    │
-│  │ + AI embeddings       │        │ • goals.json         │    │
-│  │ (vector(1536))        │        │ • decisions.json     │    │
+│  │ • plans               │        │   - pending.json     │    │
+│  │ • protocols           │        │   - completed.json   │    │
+│  │ • journal_metadata    │        │   - routine.json     │    │
+│  │                       │        │   - current.json     │    │
+│  │ Full narrative text   │        │   - time-logs/       │    │
+│  │ + AI embeddings       │        │ • plans/data/        │    │
+│  │ (vector(1536))        │        │ • goals.json         │    │
 │  │                       │        │ • relationships.json │    │
 │  └─────────────────────┘        └─────────────────────┘    │
 │                                                               │
@@ -39,7 +39,7 @@
 - Vector embeddings for semantic search
 
 **JSON Files** - Operational/structured data ONLY:
-- Daily task logs (`tracking/daily-logs/`) - today's task tracking
+- Task tracking (`tracking/pending.json`, `completed.json`, `routine.json`, `current.json`)
 - Time tracking (`tracking/time-logs/`) - time by context
 - Plan index (`plans/data/plans.json`) - references DB entries by title/ID, not full content
 - Goals (`goals.json`) - structured hierarchies (1-month, 1-year, 5-year)
@@ -153,13 +153,17 @@ CREATE TABLE journal_metadata (
 ```
 1. User logs task activity via /t commands
    ↓
-2. Write to tracking/daily-logs/daily-log-YYYY-MM-DD.json
+2. Write to tracking/ split files:
+   - pending.json (novel tasks)
+   - completed.json (done tasks)
+   - routine.json (ongoing tasks)
+   - current.json (active task + view state + cached sums)
    ↓
-3. On task completion → push event to Google Calendar ("Time Tracking" calendar)
+3. On task switch/complete → push session to Google Calendar
    ↓
-4. Update tracking/time-logs/time-log.json
+4. Context sums (day/week/month) calculated from session timestamps
    ↓
-5. Time budget (earned/spent) updated on day archive
+5. Time budget updated from session-based calculations
 ```
 
 ### Google Calendar Sync
@@ -187,7 +191,6 @@ Task sessions are automatically pushed to a dedicated **"Time Tracking"** Google
 - **Delete**: Deleted calendar events remove the local session and deduct its time; completedWork entries with no remaining sessions are removed entirely
 - `timeSpent` on tasks is recalculated when calendar times change
 - Adjacent-day logs are checked to prevent cross-midnight duplicates
-- `/t start` auto-syncs yesterday before archiving
 - `/t sync yesterday` syncs both yesterday and today
 
 **Context → Calendar color mapping:**
@@ -224,21 +227,30 @@ Tasks and time are tracked across 7 contexts:
 | Health | `heal` | 💪 | Neutral |
 | Unstructured | `us` | ☀️ | Spending |
 
-### Unstructured Mode & Time Reassignment
+### Idle/Pause & Time Reassignment
 
-When entering unstructured mode (via `/t us`, idle auto-pause, or task checker pause), the view automatically switches to **routine tasks, all contexts**. This lets you quickly reference routine tasks by number.
+When idle is detected or a task is paused (via `/t p`, idle auto-pause, or task checker pause), the current task is set to **blank** (null). No automatic switch to unstructured occurs.
 
-**Reassign unstructured time:** `/t last-N` replaces the current unstructured block with task N:
-- Logs the time to `completedWork` attributed to the referenced task
-- Adds a session + time to the pending task
+**Set last task end time:** `/t last HH:MM` sets the end time of the most recent task to a specific time (e.g., `6:50`):
+- Finds the most recent completed session
+- Replaces its `endedAt` timestamp with the specified time
+- Recalculates duration based on new end time
+- Updates the task's total time spent
+- Current remains blank
+- Only works when no task is active
+
+**Reassign idle time:** `/t last-N` attributes time since the last task ended to task N:
+- Finds the most recent session end time (when idle/pause began)
+- Creates a session from that time to now on the target task
+- Task stays in its file (pending if novel, routine if routine) — current remains blank
 - Pushes to Google Calendar with the task's context color
-- Starts a fresh unstructured block afterward
 
 **Example flow:**
-1. Working on "Fix bug" → idle detected → auto-paused to unstructured
-2. Come back, see routine tasks: `1. transit [R]  2. meals [R]  3. sleeping [R]`
-3. `/t last-1` → reassigns unstructured time to "transit"
-4. `/t -N` to switch to your next real task
+1. Working on "Fix bug" → idle detected → task auto-paused (current = blank)
+2. Come back, realize you worked until 6:50pm but system says 7:15pm → `/t last 6:50`
+3. See pending tasks: `1. Fix bug  2. Review PR  3. transit [R]`
+4. `/t last-3` → reassigns idle time to "transit" (stays in routine.json)
+5. `/t -1` to switch to your next real task
 
 ### Routine vs Novel Tasks
 
@@ -255,6 +267,7 @@ Structured work earns unstructured (free) time:
 - **Spending rate**: Unstructured time spends at 1x
 - **Neutral**: Health context neither earns nor spends
 - Balance persists across days in `tracking/time-logs/time-log.json`
+- Budget calculated from session data on task switches (no daily archival needed)
 
 ## Semantic Search
 
@@ -384,7 +397,6 @@ tail -20 tracking/idle-monitor/task-checker.log
 
 | Command | Description |
 |---------|-------------|
-| `/t start` | Start new day, carry over pending + routine tasks |
 | `/t show` or `/t` | Show statusline |
 | `/t add "task" [context] [r]` | Add pending task (optional context, optional routine flag) |
 | `/t addS "task" [context] [r]` | Add task and switch to it |
@@ -393,6 +405,8 @@ tail -20 tracking/idle-monitor/task-checker.log
 | `/t cs-N` | Complete current, switch to N |
 | `/t p-N` | Move current to pending |
 | `/t d-N` | Delete pending task N |
+| `/t note "text"` | Add note to current task |
+| `/t note-pending N "text"` | Add note to pending task N |
 | `/t m-N context` | Modify task context (0=current) |
 | `/t r` | Toggle routine/novel view |
 | `/t per\|soc\|prof\|cul\|proj\|heal\|us` | Filter by context |
@@ -400,9 +414,34 @@ tail -20 tracking/idle-monitor/task-checker.log
 | `/t jira` | Pull assigned Jira tickets |
 | `/t sync` | Sync sessions with Google Calendar (bidirectional) |
 | `/t sync yesterday` | Sync yesterday + today |
-| `/t last-N` | Reassign unstructured time to task N |
+| `/t last HH:MM` | Set end time of last task to specific time (e.g., `6:50`) |
+| `/t last-N` | Reassign idle time to task N |
 | `/t p` | Pause current task |
+| `/t rest` | Enter rest mode — pauses task, logs sleep start, starts pre-sleep journaling |
+| `/t wake` | Exit rest mode — logs wake time, starts post-sleep journaling |
+| `/t sleep:stats [N]` | Sleep analytics for last N days (default 7) |
+| `/t eeh` | Distraction journaling — quick check-in to process a distraction urge (does NOT pause current task) |
+
+### Sleep Tracking & Journaling
+
+Sleep tracking is managed via the Rest Program. See **[REST_PROGRAM.md](./REST_PROGRAM.md)** for full documentation.
+
+- **Data**: `tracking/sleep/sleep-log-YYYY-MM-DD.json` (operational), `tracking/sleep/strategies.json` (config)
+- **Journaling**: `tracking/sleep/journal/YYYY-MM-DD-rest.json` and `YYYY-MM-DD-wake.json` (pre/post-sleep journals)
+- **Memory**: `tracking/sleep/memory.md` (persistent insights — strategy effectiveness, patterns, theories)
+- **Instructions**: `tracking/sleep/instructions.md` (journaling flow for Claude)
+- **Protocols**: Bedtime Protocol + Morning Wake Protocol stored in `journals` table (type: `protocol`, context: `Health`)
+- **Flow**: `/t rest` (wind-down journaling + strategies) → sleep → `/t wake` (quality reflection + morning journaling)
+
+### Distraction Journaling
+
+Quick check-in mode for processing distraction urges. Does NOT pause or change the current task.
+
+- **Logs**: `tracking/distractions/logs/YYYY-MM-DD.json` (array of distraction events per day)
+- **Memory**: `tracking/distractions/memory.md` (persistent insights — trigger taxonomy, strategies, patterns)
+- **Instructions**: `tracking/distractions/instructions.md` (journaling flow for Claude)
+- **Flow**: `/t eeh` → brief journaling about the trigger/feeling → log event → back to work
 
 ---
 
-**Last Updated:** 2026-02-08
+**Last Updated:** 2026-02-09

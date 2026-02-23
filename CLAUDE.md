@@ -68,7 +68,7 @@ Plans (Database - full narrative)
 1. Review completed work via `npm run log:show`
 2. Generate Slack update from daily log
 3. Review time spent by context via `npm run time:week`
-4. Archive day's time automatically on next `/t start`
+4. Time budget updates automatically on task switches
 
 ---
 
@@ -94,6 +94,8 @@ When you run `/t addS "task description"` or `/t -N` to switch to a task, you ar
 **Why this matters:** When you switch tasks in the CLI, you're taking ownership of that work. Claude jumping in to "help" by planning or implementing creates confusion about who's responsible for what. The task tracking system needs to accurately reflect who's working on what, when.
 
 **Exception:** If you explicitly ask Claude to work on something (e.g., *"Please implement feature X"* without switching to it in `/t`), then Claude can take the task and own the work.
+
+**Command Execution:** When you issue a command (especially `/t` commands), Claude should execute it directly without interpretation, asking clarifying questions, or offering alternatives—unless you explicitly ask Claude to interpret or suggest changes.
 
 ---
 
@@ -250,17 +252,24 @@ VALUES (gen_random_uuid()::text, CURRENT_DATE, '[content]', '[type]', '[context]
 **Two separate task systems exist — keep them distinct:**
 
 ### 1. Terminal Todos (daily-log CLI)
-Local task tracking for **today's focused work**. Context-aware numbering, grouped display, time tracking by context, routine/novel task views, and a time budget system.
+Local task tracking for **focused work**. Tasks persist across days in 4 split files (`pending.json`, `completed.json`, `routine.json`, `current.json`). Context-aware numbering, grouped display, session-based time tracking by context, routine/novel task views, and a time budget system.
 
 For full command reference, context auto-detection keywords, routine vs novel tasks, and time budget details, see **[tracking/SESSION_ACTIVITY_TRACKING.md](./tracking/SESSION_ACTIVITY_TRACKING.md)**. For the command quick-reference table, see **[ARCHITECTURE.md](./ARCHITECTURE.md#t-command-reference)**.
 
 **Key commands:**
-- `/t start` - Start new day, carry over tasks, archive yesterday's time
 - `/t add "task" [context] [r]` - Add task (optional context code, trailing `r` = routine)
+- `/t addS "task" [context]` - Add task and immediately switch to it
 - `/t -N` / `/t c-N` / `/t cs-N` / `/t d-N` - Switch / complete / complete+switch / delete
+- `/t last HH:MM` - Set end time of last task (e.g., `/t last 6:50`, only when no task is active)
+- `/t last-N` - Reassign idle time to task N
+- `/t note "text"` - Add note to current task
+- `/t note-pending N "text"` - Add note to pending task N
 - `/t r` - Toggle routine/novel view
 - `/t per|soc|prof|cul|proj|heal|us|all` - Context filter
 - `/t jira` / `/t pull-goog` - Pull from Jira / Google Tasks
+- `/t rest` / `/t wake` - Sleep journaling (pre-sleep wind-down / post-sleep reflection)
+- `/t eeh` - Distraction journaling (quick check-in, does NOT pause current task)
+- `/t end [X-Y]` - Generate end-of-day update (date range optional)
 
 **Important**: When in a filtered context, task numbers map to only that context's tasks.
 
