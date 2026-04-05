@@ -9,18 +9,35 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 
 const fs = require('fs');
 const path = require('path');
-const { createCalendarEvent, createTimeTrackingCalendar, listCalendarEvents, CONTEXT_COLOR_MAP } = require('./google-calendar');
-const store = require('./task-store');
+const { Pool } = require('pg');
+
+const _pgPool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
+
+/** Write a completed session to task_sessions table (fire-and-forget). */
+function writeSessionToDB(task, session) {
+  if (!_pgPool) return;
+  const focusLevel = task.focusLevel !== undefined ? task.focusLevel
+    : (task.activityContext === 'us' ? 0 : task.sourceType === 'routine' ? 1 : 2);
+  _pgPool.query(
+    `INSERT INTO task_sessions (task_id, task_title, context, focus_level, started_at, ended_at, source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'live')
+     ON CONFLICT DO NOTHING`,
+    [task.sourceId || task.id || `anon-${Date.now()}`, task.title, task.activityContext || 'prof',
+     focusLevel, session.startedAt, session.endedAt]
+  ).catch(() => {}); // fire-and-forget
+}
+const { createTimeTrackingCalendar, listCalendarEvents, CONTEXT_COLOR_MAP } = require('../backend/google-calendar');
+const store = require('../backend/task-store');
 
 const {
   BASE_DIR, CONTEXT_EMOJI_MAP, ALL_CONTEXTS,
-  DEFAULT_PRIORITY,
+  DEFAULT_PRIORITY, DEFAULT_FOCUS,
   loadPending, savePending, loadCompleted, saveCompleted,
   loadRoutine, saveRoutine, loadCurrent, saveCurrent,
   generateId, getLocalDate, getMidnightToday,
   calculateElapsedMinutes, calculateElapsedMinutesUntil, formatTimeSpent, parseCustomTime,
-  categorizeWork, detectPriority, detectContext, normalizeContext,
-  normalizePriority, priorityEmoji, priorityLabel, extractTitle,
+  categorizeWork, detectPriority, detectFocus, detectContext, normalizeContext,
+  normalizePriority, normalizeFocus, priorityEmoji, priorityLabel, focusEmoji, focusLabel, extractTitle,
   getDisplayOrderedTasks, ensureRoutineTask, findRoutineTask,
   calculateContextSums,
   updateTaskInFile,
@@ -55,17 +72,8 @@ function endCurrentSession(current, endTime) {
 
   const session = { startedAt: task.startedAt, endedAt: endTimestamp };
 
-  // Push to Google Calendar (fire-and-forget)
-  try {
-    const eventId = createCalendarEvent({
-      title: task.title,
-      activityContext: task.activityContext || 'professional',
-      timeSpent: elapsedMinutes,
-      category: task.title === 'general' ? 'Context' : categorizeWork(task.title),
-      details: { startedAt: task.startedAt, completedAt: endTimestamp }
-    });
-    if (eventId) session.calendarEventId = eventId;
-  } catch (e) { /* fire-and-forget */ }
+  // Persist session to Postgres (fire-and-forget)
+  writeSessionToDB(task, session);
 
   // For routine tasks: update the source task in routine.json
   if (task.sourceType === 'routine' && task.sourceId) {
@@ -120,6 +128,128 @@ function getViewTasks(current) {
 }
 
 // ─── Task switching ─────────────────────────────────────────────────────────
+
+// ─── Report helpers ──────────────────────────────────────────────────────────
+
+function computeFocusedMinutes(sessions) {
+  let focused = 0;
+  for (const s of sessions) {
+    if (!s.session.startedAt || !s.session.endedAt) continue;
+    const mins = (new Date(s.session.endedAt) - new Date(s.session.startedAt)) / 60000;
+    focused += mins * (s.focusLevel || 0);
+  }
+  return focused;
+}
+
+function getTopTasksByTime(tasks, n = 3) {
+  return tasks
+    .filter(t => (t.timeSpent || 0) > 0)
+    .sort((a, b) => (b.timeSpent || 0) - (a.timeSpent || 0))
+    .slice(0, n);
+}
+
+function printDayReport() {
+  const todayStr = getLocalDate();
+  const sums = calculateContextSums();
+  const daySums = sums.day || {};
+  const totalMins = Object.values(daySums).reduce((a, b) => a + b, 0);
+
+  // Focused minutes from today's sessions
+  const sessions = getTodaySessions();
+  const focusedMins = computeFocusedMinutes(sessions);
+
+  // Top tasks: combine pending + completed for today
+  const pending = loadPending();
+  const completed = loadCompleted();
+  const routine = loadRoutine();
+  const current = loadCurrent();
+
+  const allTasks = [...pending, ...completed, ...routine];
+  if (current.task) allTasks.push(current.task);
+  const todayTasks = allTasks.filter(t => {
+    const sess = t.sessions || [];
+    return sess.some(s => getLocalDate(new Date(s.startedAt)) === todayStr);
+  });
+  const topTasks = getTopTasksByTime(todayTasks, 3);
+
+  console.log('\n📊 Daily Report — ' + todayStr);
+  console.log('─'.repeat(40));
+  console.log(`  Total tracked:    ${formatTimeSpent(totalMins)}`);
+  console.log(`  Focused minutes:  ${formatTimeSpent(Math.round(focusedMins))}`);
+  console.log('\n  By context:');
+  for (const [ctx, mins] of Object.entries(daySums)) {
+    if (mins < 1) continue;
+    const emoji = CONTEXT_EMOJI_MAP[ctx] || '·';
+    console.log(`    ${emoji} ${ctx.padEnd(14)} ${formatTimeSpent(mins)}`);
+  }
+  if (topTasks.length > 0) {
+    console.log('\n  Top tasks:');
+    topTasks.forEach((t, i) => {
+      console.log(`    ${i + 1}. ${t.title} (${formatTimeSpent(t.timeSpent)})`);
+    });
+  }
+  console.log('');
+}
+
+function printWeekReport() {
+  const sums = calculateContextSums();
+  const weekSums = sums.week || {};
+  const totalMins = Object.values(weekSums).reduce((a, b) => a + b, 0);
+
+  // Approximate focused minutes from completed+pending sessions in week window
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  weekStart.setHours(0, 0, 0, 0);
+
+  const pending = loadPending();
+  const completed = loadCompleted();
+  const routine = loadRoutine();
+  const current = loadCurrent();
+  const allTasks = [...pending, ...completed, ...routine];
+  if (current.task) allTasks.push(current.task);
+
+  let focusedMins = 0;
+  const taskMinsMap = {};
+  for (const task of allTasks) {
+    let taskWeekMins = 0;
+    for (const s of (task.sessions || [])) {
+      if (!s.startedAt) continue;
+      const start = new Date(s.startedAt);
+      if (start < weekStart) continue;
+      const end = s.endedAt ? new Date(s.endedAt) : now;
+      const mins = (end - start) / 60000;
+      taskWeekMins += mins;
+      focusedMins += mins * (task.focusLevel || 0);
+    }
+    if (taskWeekMins > 0) {
+      const key = task.title;
+      taskMinsMap[key] = (taskMinsMap[key] || 0) + taskWeekMins;
+    }
+  }
+
+  const topTasks = Object.entries(taskMinsMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+
+  console.log('\n📊 Week Report — week of ' + weekStart.toISOString().slice(0, 10));
+  console.log('─'.repeat(40));
+  console.log(`  Total tracked:    ${formatTimeSpent(totalMins)}`);
+  console.log(`  Focused minutes:  ${formatTimeSpent(Math.round(focusedMins))}`);
+  console.log('\n  By context:');
+  for (const [ctx, mins] of Object.entries(weekSums)) {
+    if (mins < 1) continue;
+    const emoji = CONTEXT_EMOJI_MAP[ctx] || '·';
+    console.log(`    ${emoji} ${ctx.padEnd(14)} ${formatTimeSpent(mins)}`);
+  }
+  if (topTasks.length > 0) {
+    console.log('\n  Top tasks:');
+    topTasks.forEach(([title, mins], i) => {
+      console.log(`    ${i + 1}. ${title} (${formatTimeSpent(Math.round(mins))})`);
+    });
+  }
+  console.log('');
+}
 
 function switchToTask(taskNumber) {
   const current = loadCurrent();
@@ -183,7 +313,8 @@ function switchToTask(taskNumber) {
     notes: targetTask.notes || [],
     sessions: targetTask.sessions || [],
     category: targetTask.category || categorizeWork(targetTask.title),
-    priority: targetTask.priority || 'medium'
+    priority: targetTask.priority || 'medium',
+    focusLevel: targetTask.focusLevel ?? null
   };
 
   if (targetTask.jiraTicket) newTask.jiraTicket = targetTask.jiraTicket;
@@ -203,6 +334,125 @@ function switchToTask(taskNumber) {
   } else {
     console.log(`\n✅ ${emoji} : ${newTask.title}\n`);
   }
+
+  // Protocol surfacing: look up related protocols from DB (fire-and-forget)
+  if (_pgPool && !targetTask.protocolHints) {
+    const keywords = newTask.title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (keywords.length > 0) {
+      const pattern = '%' + keywords.slice(0, 3).join('%') + '%';
+      _pgPool.query(
+        `SELECT id, content FROM journals WHERE type = 'protocol' AND LOWER(content) ILIKE $1 LIMIT 3`,
+        [pattern]
+      ).then(res => {
+        if (res.rows.length > 0) {
+          console.log('📋 Related protocols:');
+          res.rows.forEach(row => {
+            // Extract protocol title from first line
+            const firstLine = row.content.split('\n')[0].replace(/^Protocol:\s*/i, '').trim();
+            console.log(`   · ${firstLine}`);
+          });
+          console.log('');
+          // Cache hints on current task
+          const c = loadCurrent();
+          if (c.task) {
+            c.task.protocolHints = res.rows.map(r => r.id);
+            saveCurrent(c);
+          }
+        }
+      }).catch(() => {});
+    }
+  }
+}
+
+// ─── Fuzzy search for tasks ─────────────────────────────────────────────────
+
+/**
+ * Find best matches for a search query across routine and pending tasks.
+ * Uses priority-based matching: exact → substring → word → reverse.
+ */
+function findBestMatches(searchQuery, tasks) {
+  // 1. Exact match (highest priority)
+  const exact = tasks.filter(t => t.title.toLowerCase() === searchQuery);
+  if (exact.length > 0) return exact;
+
+  // 2. Substring match (task title contains query)
+  const substring = tasks.filter(t => t.title.toLowerCase().includes(searchQuery));
+  if (substring.length > 0) return substring;
+
+  // 3. Word-based match (all words in query appear in title)
+  const words = searchQuery.split(/\s+/);
+  const wordMatches = tasks.filter(t => {
+    const titleLower = t.title.toLowerCase();
+    return words.every(word => titleLower.includes(word));
+  });
+  if (wordMatches.length > 0) return wordMatches;
+
+  // 4. Reverse match (query contains task title)
+  const reverse = tasks.filter(t => searchQuery.includes(t.title.toLowerCase()));
+  if (reverse.length > 0) return reverse;
+
+  return [];
+}
+
+/**
+ * Fuzzy search across routine and pending tasks, then switch to the best match.
+ * Searches all contexts and ignores current view mode.
+ */
+function fuzzySearchAndSwitch(query) {
+  const current = loadCurrent();
+  const searchQuery = query.toLowerCase().trim();
+
+  // Load both routine and novel tasks, excluding 'general' placeholder
+  const routine = loadRoutine().filter(t => t.title !== 'general');
+  const pending = loadPending();
+  const allTasks = [...routine, ...pending];
+
+  if (allTasks.length === 0) {
+    console.error('\n❌ No tasks available to search\n');
+    process.exit(1);
+  }
+
+  // Search with priority matching
+  const matches = findBestMatches(searchQuery, allTasks);
+
+  if (matches.length === 0) {
+    console.error(`\n❌ No tasks found matching "${query}"\n`);
+    console.log('Run /t to see all tasks\n');
+    process.exit(1);
+  }
+
+  // Auto-switch to first/best match
+  const bestMatch = matches[0];
+
+  // Determine if it's routine or pending
+  const isRoutine = routine.some(t => t.id === bestMatch.id);
+
+  // Switch view mode to match task type
+  current.viewMode = isRoutine ? 'routine' : 'novel';
+  current.contextFilter = null; // Clear filter to show all tasks
+  saveCurrent(current);
+
+  // Get display tasks with correct view mode
+  const displayTasks = getViewTasks(current);
+  const taskIndex = displayTasks.findIndex(t => t.id === bestMatch.id);
+
+  if (taskIndex === -1) {
+    console.error('\n❌ Error: Task not found in display list\n');
+    process.exit(1);
+  }
+
+  // Print search result
+  const contextEmoji = CONTEXT_EMOJI_MAP[bestMatch.activityContext] || '📋';
+  console.log(`\n🔍 Found: ${contextEmoji} ${bestMatch.title}`);
+
+  if (matches.length > 1) {
+    console.log(`   (${matches.length} matches found, switching to best match)\n`);
+  } else {
+    console.log('');
+  }
+
+  // Switch to the task (1-indexed)
+  switchToTask(taskIndex + 1);
 }
 
 // ─── Completing tasks ───────────────────────────────────────────────────────
@@ -295,18 +545,43 @@ function completeTaskByNumber(taskNumber) {
   console.log(`\n✅ Task #${taskNumber} completed: ${emoji} ${taskToComplete.title}${timeStr}\n`);
 }
 
-function completeBulkTasks(taskNumbersStr) {
-  const match = taskNumbersStr.match(/\[([0-9,\s]+)\]/);
+function parseTaskNumbers(taskNumbersStr) {
+  const match = taskNumbersStr.match(/\[([0-9,\-\s]+)\]/);
   if (!match) {
-    console.error('\n❌ Invalid format. Use: c-[1,3,4,5]\n');
-    process.exit(1);
+    return null;
   }
 
-  const taskNumbers = match[1]
-    .split(',')
-    .map(n => parseInt(n.trim()))
-    .filter(n => !isNaN(n))
-    .sort((a, b) => b - a);
+  const parts = match[1].split(',');
+  const numbers = new Set();
+
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.includes('-')) {
+      const [start, end] = trimmed.split('-').map(n => parseInt(n.trim()));
+      if (!isNaN(start) && !isNaN(end)) {
+        const min = Math.min(start, end);
+        const max = Math.max(start, end);
+        for (let i = min; i <= max; i++) {
+          numbers.add(i);
+        }
+      }
+    } else {
+      const num = parseInt(trimmed);
+      if (!isNaN(num)) {
+        numbers.add(num);
+      }
+    }
+  }
+
+  return Array.from(numbers).sort((a, b) => b - a);
+}
+
+function completeBulkTasks(taskNumbersStr) {
+  const taskNumbers = parseTaskNumbers(taskNumbersStr);
+  if (!taskNumbers) {
+    console.error('\n❌ Invalid format. Use: c-[1,3,4,5] or c-[1-3,5-7]\n');
+    process.exit(1);
+  }
 
   if (taskNumbers.length === 0) {
     console.error('\n❌ No valid task numbers provided\n');
@@ -445,6 +720,20 @@ function parseTaskFlags(description, currentContextFilter) {
   let cleanDesc = description;
   let isRoutine = false;
 
+  // Strip p:N and f:N flags first so they don't interfere with trailing context detection
+  let priorityOverride = null;
+  let focusOverride = null;
+  const priorityFlagMatch = cleanDesc.match(/\bp:([1-5])\b/i);
+  if (priorityFlagMatch) {
+    priorityOverride = parseInt(priorityFlagMatch[1]);
+    cleanDesc = cleanDesc.replace(/\bp:[1-5]\b/i, '').trim();
+  }
+  const focusFlagMatch = cleanDesc.match(/\bf:([0-5])\b/i);
+  if (focusFlagMatch) {
+    focusOverride = parseInt(focusFlagMatch[1]);
+    cleanDesc = cleanDesc.replace(/\bf:[0-5]\b/i, '').trim();
+  }
+
   // Check for routine flag 'r' at end FIRST
   const routineMatch = cleanDesc.match(/\s+r$/i);
   if (routineMatch) {
@@ -466,17 +755,19 @@ function parseTaskFlags(description, currentContextFilter) {
     }
   }
 
-  const priority = detectPriority(cleanDesc);
+  const priority = priorityOverride ?? detectPriority(cleanDesc);
   cleanDesc = cleanDesc.replace(/\b(urgent|asap|critical|low|high|medium|whenever|optional)\b/gi, '').trim();
+  const focusLevel = focusOverride ?? detectFocus(cleanDesc);
+  cleanDesc = cleanDesc.replace(/\b(deep work|deep dive|complex|quick|routine)\b/gi, '').trim();
   const activityContext = contextOverride || currentContextFilter || detectContext(cleanDesc);
   const category = categorizeWork(cleanDesc);
 
-  return { cleanDesc, activityContext, category, priority, isRoutine };
+  return { cleanDesc, activityContext, category, priority, focusLevel, isRoutine };
 }
 
 function addPendingTask(description) {
   const current = loadCurrent();
-  const { cleanDesc, activityContext, category, priority, isRoutine } = parseTaskFlags(description, current.contextFilter);
+  const { cleanDesc, activityContext, category, priority, focusLevel, isRoutine } = parseTaskFlags(description, current.contextFilter);
 
   const entry = {
     id: generateId(),
@@ -484,6 +775,7 @@ function addPendingTask(description) {
     activityContext,
     category,
     priority,
+    focusLevel,
     timeSpent: 0,
     sessions: [],
     notes: []
@@ -503,7 +795,7 @@ function addPendingTask(description) {
   const contextEmoji = CONTEXT_EMOJI_MAP[activityContext] || '💼';
   const routineLabel = isRoutine ? ' [R]' : '';
   console.log(`\n✅ Pending task added${routineLabel}:`);
-  console.log(`   ${contextEmoji} ${priorityEmoji(priority)} [${priorityLabel(priority)}] ${cleanDesc}\n`);
+  console.log(`   ${contextEmoji} ${priorityEmoji(priority)} [${priorityLabel(priority)}] ${focusEmoji(focusLevel)} [F:${focusLevel}] ${cleanDesc}\n`);
 }
 
 function addMultipleTasks(tasksArray, contextOverride, isRoutine) {
@@ -526,7 +818,8 @@ function addMultipleTasks(tasksArray, contextOverride, isRoutine) {
 
     const cleanDesc = description.trim();
     const priority = detectPriority(cleanDesc);
-    const finalDesc = cleanDesc.replace(/\b(urgent|asap|critical|low|high|medium|whenever|optional)\b/gi, '').trim();
+    const focusLevel = detectFocus(cleanDesc);
+    const finalDesc = cleanDesc.replace(/\b(urgent|asap|critical|low|high|medium|whenever|optional|deep work|deep dive|complex|quick|routine)\b/gi, '').trim();
     const category = categorizeWork(finalDesc);
 
     const entry = {
@@ -535,6 +828,7 @@ function addMultipleTasks(tasksArray, contextOverride, isRoutine) {
       activityContext,
       category,
       priority,
+      focusLevel,
       timeSpent: 0,
       sessions: [],
       notes: []
@@ -562,7 +856,7 @@ function addPendingTaskAndSwitch(description) {
   const now = new Date();
   const timestamp = now.toISOString();
 
-  const { cleanDesc, activityContext, category, priority, isRoutine } = parseTaskFlags(description, current.contextFilter);
+  const { cleanDesc, activityContext, category, priority, focusLevel, isRoutine } = parseTaskFlags(description, current.contextFilter);
   const newId = generateId();
 
   // End current session if active
@@ -599,6 +893,7 @@ function addPendingTaskAndSwitch(description) {
       activityContext,
       category,
       priority,
+      focusLevel,
       timeSpent: 0,
       sessions: [],
       notes: [],
@@ -618,7 +913,8 @@ function addPendingTaskAndSwitch(description) {
     notes: [],
     sessions: [],
     category,
-    priority
+    priority,
+    focusLevel
   };
   current.contextFilter = activityContext;
   current.contextSums = calculateContextSums();
@@ -755,17 +1051,11 @@ function deleteTask(taskNumber) {
 }
 
 function deleteBulkTasks(taskNumbersStr) {
-  const match = taskNumbersStr.match(/\[([0-9,\s]+)\]/);
-  if (!match) {
-    console.error('\n❌ Invalid format. Use: d-[2,3,4,5]\n');
+  const taskNumbers = parseTaskNumbers(taskNumbersStr);
+  if (!taskNumbers) {
+    console.error('\n❌ Invalid format. Use: d-[2,3,4,5] or d-[1-3,5-7]\n');
     process.exit(1);
   }
-
-  const taskNumbers = match[1]
-    .split(',')
-    .map(n => parseInt(n.trim()))
-    .filter(n => !isNaN(n))
-    .sort((a, b) => b - a);
 
   if (taskNumbers.length === 0) {
     console.error('\n❌ No valid task numbers provided\n');
@@ -932,6 +1222,53 @@ function setTaskPriority(taskNumber, newPriority) {
   console.log(`   ${selectedTask.title}\n`);
 }
 
+// ─── Set focus level ─────────────────────────────────────────────────────────
+
+function setTaskFocus(taskNumber, newFocus) {
+  const foc = parseInt(newFocus);
+  if (isNaN(foc) || foc < 0 || foc > 5) {
+    console.error(`\n❌ Invalid focus level: ${newFocus}`);
+    console.error(`   Valid values: 0 (trivial) to 5 (deep work)\n`);
+    return;
+  }
+
+  if (taskNumber === 0) {
+    const current = loadCurrent();
+    if (!current.task) { console.log('\n⚠️  No current task to modify.\n'); return; }
+    const oldFoc = normalizeFocus(current.task.focusLevel);
+    current.task.focusLevel = foc;
+    saveCurrent(current);
+    if (current.task.sourceId) {
+      updateTaskInFile(current.task.sourceId, (t) => { t.focusLevel = foc; });
+    }
+    console.log(`\n✅ Current task focus: ${focusEmoji(oldFoc)} [F:${oldFoc}] → ${focusEmoji(foc)} [F:${foc}] ${focusLabel(foc)}`);
+    console.log(`   ${current.task.title}\n`);
+    return;
+  }
+
+  const current = loadCurrent();
+  const viewMode = current.viewMode || 'novel';
+  const allTasks = viewMode === 'routine' ? loadRoutine() : loadPending();
+  const displayTasks = getDisplayOrderedTasks(allTasks, current.contextFilter);
+
+  if (taskNumber < 1 || taskNumber > displayTasks.length) {
+    console.error(`\n❌ Invalid task number: ${taskNumber}\n`);
+    return;
+  }
+
+  const selectedTask = displayTasks[taskNumber - 1];
+  const actualIdx = allTasks.findIndex(t => t.id === selectedTask.id);
+  const oldFoc = normalizeFocus(selectedTask.focusLevel);
+
+  allTasks[actualIdx].focusLevel = foc;
+
+  if (viewMode === 'routine') saveRoutine(allTasks);
+  else savePending(allTasks);
+
+  console.log(`\n✅ Task focus: ${focusEmoji(oldFoc)} [F:${oldFoc}] → ${focusEmoji(foc)} [F:${foc}] ${focusLabel(foc)}`);
+  console.log(`   ${selectedTask.title}\n`);
+}
+
 // ─── Context switching ──────────────────────────────────────────────────────
 
 function switchToContext(contextCode) {
@@ -1061,6 +1398,7 @@ function clearContextFilter() {
 
   current.task = null;
   current.contextFilter = null;
+  current.viewMode = 'novel';
   current.contextSums = calculateContextSums();
   saveCurrent(current);
 
@@ -1103,16 +1441,8 @@ function reassignUnstructuredTime(taskNumber) {
   const targetTask = displayTasks[taskIndex];
   const session = { startedAt: blockStart, endedAt: timestamp };
 
-  try {
-    const calEventId = createCalendarEvent({
-      title: targetTask.title,
-      activityContext: targetTask.activityContext || 'professional',
-      timeSpent: elapsedMinutes,
-      category: targetTask.routine ? 'Routine' : categorizeWork(targetTask.title),
-      details: { startedAt: blockStart, completedAt: timestamp }
-    });
-    if (calEventId) session.calendarEventId = calEventId;
-  } catch (e) {}
+  // Persist session to Postgres (fire-and-forget)
+  writeSessionToDB(targetTask, session);
 
   // Add session + time to the target task (stays in its file — pending or routine)
   updateTaskInFile(targetTask.id, (t) => {
@@ -1292,16 +1622,8 @@ function logSession(sessionJson) {
 
   const session = { startedAt, endedAt };
 
-  try {
-    const calEventId = createCalendarEvent({
-      title,
-      activityContext: context,
-      timeSpent: elapsedMinutes,
-      category: categorizeWork(title),
-      details: { startedAt, completedAt: endedAt }
-    });
-    if (calEventId) session.calendarEventId = calEventId;
-  } catch (e) {}
+  // Persist session to Postgres (fire-and-forget)
+  writeSessionToDB({ title, activityContext: context, focusLevel: undefined }, session);
 
   let matchType = 'new';
   let matchedTitle = null;
@@ -1519,10 +1841,12 @@ function showDailyLog(date) {
       }
 
       const pri = normalizePriority(task.priority);
+      const foc = task.focusLevel != null ? normalizeFocus(task.focusLevel) : DEFAULT_FOCUS;
       const timeStr = task.timeSpent > 0 ? ` [⏱️  ${formatTimeSpent(task.timeSpent)}]` : '';
       const routineTag = task.routine ? ' [R]' : '';
       const priTag = pri !== DEFAULT_PRIORITY ? ` ${priorityEmoji(pri)} [${priorityLabel(pri)}]` : '';
-      console.log(`   ${taskNum}.${priTag} ${task.title}${timeStr}${routineTag}`);
+      const focTag = foc !== DEFAULT_FOCUS ? ` ${focusEmoji(foc)} [F:${foc}]` : '';
+      console.log(`   ${taskNum}.${priTag}${focTag} ${task.title}${timeStr}${routineTag}`);
       if (task.notes && task.notes.length > 0) {
         task.notes.forEach((note, noteIdx) => {
           const noteTime = note.timestamp.split('T')[1].substring(0, 8);
@@ -1616,31 +1940,6 @@ function syncCalendar(dates = [TODAY], quiet = false) {
           allSessionRefs.push({ ...ref, sessionIdx: sIdx, session });
         }
       });
-    }
-
-    // --- PUSH: sessions without calendarEventId ---
-    const unsynced = allSessionRefs.filter(r => !r.session.calendarEventId);
-    for (const ref of unsynced) {
-      const { item, session } = ref;
-      if (!session.startedAt || !session.endedAt) continue;
-
-      const durationMs = new Date(session.endedAt) - new Date(session.startedAt);
-      const durationMin = Math.round(durationMs / 60000);
-      if (durationMin < 1) continue;
-
-      const eventId = createCalendarEvent({
-        title: item.title,
-        activityContext: item.activityContext,
-        timeSpent: durationMin,
-        category: item.category || 'General',
-        details: { startedAt: session.startedAt, completedAt: session.endedAt }
-      });
-
-      if (eventId) {
-        session.calendarEventId = eventId;
-        modified = true;
-        totalPushed++;
-      }
     }
 
     // --- PULL: fetch calendar events and reconcile ---
@@ -2654,6 +2953,7 @@ TASK MANAGEMENT:
   /t p [time]                    Pause current task
   /t m-N <ctx>                   Modify task N context
   /t pri-N <1-5>                 Set priority (1=high, 3=normal, 5=low)
+  /t focus-N <0-5>              Set focus level (0=trivial, 3=medium, 5=deep work)
   /t note "text"                 Add note to current task
   /t note-pending N "text"       Add note to task N
   /t r                           Toggle routine/novel view
@@ -2730,6 +3030,22 @@ try {
     process.exit(0);
   }
 
+  // Handle set-focus: focus-N <0-5>
+  if (command && command.startsWith('focus-')) {
+    const taskNumber = parseInt(command.substring(6));
+    if (isNaN(taskNumber)) {
+      console.error('\n❌ Usage: focus-N <0-5>  (0=trivial, 3=medium, 5=deep work)\n');
+      process.exit(1);
+    }
+    if (args.length < 1) {
+      console.error('\n❌ Missing focus level\n');
+      console.error('   Usage: focus-N <0-5>  (0=trivial, 3=medium, 5=deep work)\n');
+      process.exit(1);
+    }
+    setTaskFocus(taskNumber, args[0]);
+    process.exit(0);
+  }
+
   // Handle last HH:MM: set end time of last task
   if (command === 'last' && args.length > 0) {
     const timeArg = args[0];
@@ -2792,6 +3108,17 @@ try {
       process.exit(1);
     }
     deleteTask(taskNumber);
+    process.exit(0);
+  }
+
+  // Handle ?: fuzzy search for tasks
+  if (command === '?') {
+    const query = args.join(' ').trim();
+    if (!query) {
+      console.error('\n❌ Usage: /t ? <search query>\n');
+      process.exit(1);
+    }
+    fuzzySearchAndSwitch(query);
     process.exit(0);
   }
 
@@ -3053,6 +3380,20 @@ try {
       }
       break;
     }
+
+    case 'report': {
+      const subArg = args[0] || 'day';
+      if (subArg === 'week') {
+        printWeekReport();
+      } else {
+        printDayReport();
+      }
+      break;
+    }
+
+    case 'report-week':
+      printWeekReport();
+      break;
 
     case 'help':
     case '--help':
