@@ -14,13 +14,25 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
-const { createCalendarEvent } = require('./google-calendar');
+const { Pool } = require('pg');
+const _pgPool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
+function writeSessionToDB(task, session) {
+  if (!_pgPool) return;
+  const focusLevel = task.focusLevel !== undefined ? task.focusLevel
+    : (task.activityContext === 'us' || task.activityContext === 'unstructured' ? 0 : task.sourceType === 'routine' ? 1 : 2);
+  _pgPool.query(
+    `INSERT INTO task_sessions (task_id, task_title, context, focus_level, started_at, ended_at, source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'live') ON CONFLICT DO NOTHING`,
+    [task.sourceId || task.id || `anon-${Date.now()}`, task.title, task.activityContext || 'prof',
+     focusLevel, session.startedAt, session.endedAt]
+  ).catch(() => {});
+}
 const {
   BASE_DIR, CONTEXT_EMOJI_MAP,
-  loadPending, savePending, loadCurrent, saveCurrent,
+  loadPending, savePending, loadCurrent, saveCurrent, loadCompleted, saveCompleted,
   generateId, categorizeWork, formatTimeSpent,
   calculateContextSums, updateTaskInFile
-} = require('./task-store');
+} = require('../backend/task-store');
 
 // Constants
 const MIN_ELAPSED_MINUTES = 5;  // Don't show popup if task started < 5 min ago
@@ -102,8 +114,8 @@ function runAppleScript(script, timeoutMs) {
 
 function showCheckDialog(taskTitle, elapsedStr, hasPendingTasks) {
   const buttons = hasPendingTasks
-    ? '{"Pause", "Switch Task", "Still on it"}'
-    : '{"Pause", "Still on it"}';
+    ? '{"Pause", "Done ✓", "Switch Task", "Still on it"}'
+    : '{"Pause", "Done ✓", "Still on it"}';
 
   const message = `Current task: ${escapeAppleScript(taskTitle)}\\nElapsed: ${elapsedStr}\\n\\nStill working on this?`;
 
@@ -115,6 +127,7 @@ function showCheckDialog(taskTitle, elapsedStr, hasPendingTasks) {
   if (result.includes('gave up:true')) return 'continue';
   if (result.includes('button returned:Still on it')) return 'continue';
   if (result.includes('button returned:Switch Task')) return 'switch';
+  if (result.includes('button returned:Done ✓')) return 'complete';
   if (result.includes('button returned:Pause')) return 'pause';
   return 'continue';
 }
@@ -153,18 +166,7 @@ function endCurrentAndRecord(current, endTimeISO) {
 
   // Build session
   const session = { startedAt: task.startedAt, endedAt: endTimeISO };
-  try {
-    const eventId = createCalendarEvent({
-      title: task.title,
-      activityContext: task.activityContext,
-      timeSpent: elapsedMinutes,
-      category: task.title === 'general' ? 'Context' : categorizeWork(task.title),
-      details: { startedAt: task.startedAt, completedAt: endTimeISO }
-    });
-    if (eventId) session.calendarEventId = eventId;
-  } catch (e) {
-    // Calendar push is fire-and-forget
-  }
+  writeSessionToDB(task, session);
 
   if (task.sourceType === 'pending') {
     // Put pending task back with session
@@ -237,6 +239,48 @@ function performTaskSwitch(current, pendingTasks, selectedIndex) {
   current.task = savedTask;
 
   return true;
+}
+
+function performComplete(current) {
+  const timestamp = new Date().toISOString();
+  const task = current.task;
+  if (!task) return;
+
+  current.task.notes = [...(task.notes || []), {
+    text: 'Completed via task check-in',
+    timestamp: timestamp
+  }];
+
+  const startTime = new Date(task.startedAt);
+  const elapsedMinutes = Math.round((new Date(timestamp) - startTime) / 60000);
+  const session = { startedAt: task.startedAt, endedAt: timestamp };
+  writeSessionToDB(task, session);
+
+  if (task.sourceType === 'pending') {
+    // Remove from pending (if it was re-added) and move to completed
+    let pending = loadPending();
+    pending = pending.filter(t => t.id !== task.sourceId);
+    savePending(pending);
+  }
+
+  const completed = loadCompleted();
+  completed.push({
+    id: task.sourceId || generateId(),
+    title: task.title,
+    activityContext: task.activityContext || 'professional',
+    category: categorizeWork(task.title),
+    timeSpent: (task.timeSpent || 0) + elapsedMinutes,
+    completedAt: timestamp,
+    notes: [...(task.notes || [])],
+    sessions: [...(task.sessions || []), session],
+    ...(task.jiraTicket && { jiraTicket: task.jiraTicket }),
+    ...(task.jiraUrl && { jiraUrl: task.jiraUrl })
+  });
+  saveCompleted(completed);
+
+  current.task = null;
+  current.contextFilter = null;
+  current.contextSums = calculateContextSums();
 }
 
 function performPause(current) {
@@ -317,6 +361,18 @@ function main() {
     saveState({
       lastCheck: now.toISOString(),
       lastTaskTitle: task.title,
+      snoozeUntil: null
+    });
+    return;
+  }
+
+  if (action === 'complete') {
+    log('User marked task as complete');
+    performComplete(current);
+    saveCurrent(current);
+    saveState({
+      lastCheck: now.toISOString(),
+      lastTaskTitle: null,
       snoozeUntil: null
     });
     return;

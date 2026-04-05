@@ -12,14 +12,26 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
-const { createCalendarEvent } = require('./google-calendar');
+const { Pool } = require('pg');
+const _pgPool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
+function writeSessionToDB(task, session) {
+  if (!_pgPool) return;
+  const focusLevel = task.focusLevel !== undefined ? task.focusLevel
+    : (task.activityContext === 'us' || task.activityContext === 'unstructured' ? 0 : task.sourceType === 'routine' ? 1 : 2);
+  _pgPool.query(
+    `INSERT INTO task_sessions (task_id, task_title, context, focus_level, started_at, ended_at, source)
+     VALUES ($1, $2, $3, $4, $5, $6, 'live') ON CONFLICT DO NOTHING`,
+    [task.sourceId || task.id || `anon-${Date.now()}`, task.title, task.activityContext || 'prof',
+     focusLevel, session.startedAt, session.endedAt]
+  ).catch(() => {});
+}
 const {
   BASE_DIR, CONTEXT_EMOJI_MAP,
   loadPending, savePending,
   loadCurrent, saveCurrent,
   generateId, categorizeWork, formatTimeSpent,
   calculateContextSums, updateTaskInFile
-} = require('./task-store');
+} = require('../backend/task-store');
 
 // Constants
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
@@ -56,18 +68,7 @@ function autoPauseTask(current, endTime) {
 
   // Build session
   const session = { startedAt: task.startedAt, endedAt: endTimeISO };
-  try {
-    const eventId = createCalendarEvent({
-      title: task.title,
-      activityContext: task.activityContext,
-      timeSpent: elapsedMinutes,
-      category: task.title === 'general' ? 'Context' : categorizeWork(task.title),
-      details: { startedAt: task.startedAt, completedAt: endTimeISO }
-    });
-    if (eventId) session.calendarEventId = eventId;
-  } catch (e) {
-    // Calendar push is fire-and-forget
-  }
+  writeSessionToDB(task, session);
 
   const totalTimeSpent = (task.timeSpent || 0) + elapsedMinutes;
 
