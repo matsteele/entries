@@ -99,6 +99,20 @@ export function useSetMealSlot() {
   });
 }
 
+export function useTaskAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      fetch('/api/tasks/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+      qc.invalidateQueries({ queryKey: ['time'] });
+      qc.invalidateQueries({ queryKey: ['focus'] });
+    },
+  });
+}
+
 export function useUpdateSession() {
   const qc = useQueryClient();
   return useMutation({
