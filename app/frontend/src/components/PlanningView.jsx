@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Box, Typography, Breadcrumbs, Link, Chip, IconButton, Slider,
   Divider, TextField, Button, Select, MenuItem, FormControl,
@@ -10,6 +11,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import * as d3Hierarchy from 'd3-hierarchy';
@@ -80,9 +82,9 @@ const fmtFocusMin = (m) => {
   if (!m) return '0';
   const h = Math.floor(m / 60);
   const mins = m % 60;
-  if (h === 0) return `${mins}m`;
-  if (mins === 0) return `${h}h`;
-  return `${h}h${mins}m`;
+  if (h === 0) return `${mins}fm`;
+  if (mins === 0) return `${h}fh`;
+  return `${h}fh ${mins}fm`;
 };
 
 // ─── Allocation Bar — stacked bar showing all goal allocations ──────────────
@@ -328,6 +330,7 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
   const isEpic = d.type === 'epic';
   const isAction = d.type === 'action';
 
+  const queryClient = useQueryClient();
   const { data: narrative } = useProjectNarrative(isProject ? d.id : null);
   const { data: weeklyData } = useWeeklyGoalProgress();
   const updateGoal = useUpdateGoal();
@@ -626,6 +629,28 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
             </Box>
           )}
         </Box>
+      )}
+
+      {/* Delete */}
+      {(isAction || isEpic || isProject) && (
+        <Button
+          size="small"
+          color="error"
+          variant="outlined"
+          startIcon={<DeleteOutlineIcon />}
+          fullWidth
+          onClick={async () => {
+            const type = isAction ? 'actions' : isEpic ? 'epics' : 'projects';
+            const label = isAction ? 'action' : isEpic ? 'epic' : 'project';
+            if (!window.confirm(`Delete this ${label}?`)) return;
+            await fetch(`/api/${type}/${d.id}`, { method: 'DELETE' });
+            queryClient.invalidateQueries({ queryKey: ['goals'] });
+            onClose();
+          }}
+          sx={{ mb: 2, opacity: 0.6, '&:hover': { opacity: 1 } }}
+        >
+          Delete
+        </Button>
       )}
 
       {/* Description */}
