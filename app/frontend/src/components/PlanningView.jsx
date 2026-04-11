@@ -876,8 +876,8 @@ export default function PlanningView({ initialGoalId } = {}) {
         <Box
           ref={containerRef}
           sx={{
-            position: 'relative', mx: 2, mb: 1,
-            height: Math.min(500, Math.max(250, (currentData?.children?.length || 3) * 80)),
+            position: 'relative', mx: 2, mb: 1, overflow: 'hidden',
+            height: Math.min(600, Math.max(300, (currentData?.children?.length || 3) * 100)),
           }}
         >
           {leaves.map(leaf => (
@@ -899,9 +899,9 @@ export default function PlanningView({ initialGoalId } = {}) {
           )}
         </Box>
 
-        {/* Dormant region */}
+        {/* Dormant region — below treemap */}
         {dormantGoals.length > 0 && (
-          <Box sx={{ px: 2, py: 1, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <Box sx={{ px: 2, py: 1.5, mt: 1, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <Typography variant="caption" sx={{ color: 'text.secondary', mr: 1 }}>
               Dormant:
             </Typography>
