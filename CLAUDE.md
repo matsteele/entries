@@ -650,6 +650,33 @@ Ask the user what to act on. Based on response:
 
 ---
 
+## Project Structure Convention
+
+Every project follows a standard file structure that maps to the Planning view hierarchy:
+
+```
+project-folder/
+├── .RM.md              # Roadmap — high-level features/epics, links to goal
+├── ARCHITECTURE.md     # What has been built — current system state
+├── docs/
+│   ├── epics/          # PRDs for specific epics (one per epic)
+│   │   ├── bot-platform.md
+│   │   ├── momentum-roadmap.md
+│   │   └── dashboard.md
+│   └── ...
+└── ...
+```
+
+**`.RM.md` (Roadmap):** Lists all epics/features with status (done/in-progress/planned). This is the basis for the Planning view's project → epics → actions hierarchy. Each epic links to its PRD file if one exists.
+
+**`ARCHITECTURE.md`:** Documents what has been built — system state, tech stack, data flow. Reflects reality, not aspirations.
+
+**`docs/epics/*.md` (PRDs):** Detailed requirements for specific epics. User stories, acceptance criteria, design decisions. These are the source of truth for actions within each epic.
+
+**Syncing with Planning view:** When starting work on a project, read `.RM.md` and relevant PRDs to sync the planning view's epics and actions. Mark completed work, add new actions from PRDs, remove stale items.
+
+---
+
 ## Session Activity Tracking
 
 Track activities during sessions for end-of-day debriefs. Update daily log periodically.
