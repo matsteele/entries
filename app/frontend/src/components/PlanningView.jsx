@@ -17,6 +17,7 @@ import { CONTEXT_CONFIG } from '../lib/contexts';
 import {
   useGoalsTreemap, useProjectNarrative, useUpdateGoal, useUpdateProject,
   useUpdateEpic, useUpdateAction, useCreateEpic, useCreateAction, useTaskAction,
+  useWeeklyGoalProgress,
 } from '../hooks/useApi';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -69,6 +70,127 @@ function computeTreemap(data, width, height) {
   }
 
   return leaves;
+}
+
+// ─── Weekly capacity: 3 focused hours/day × 5 focus × 7 days ────────────────
+const WEEKLY_CAPACITY = 3 * 60 * 5 * 7; // 6300 focused-minutes max (theoretical)
+const REALISTIC_WEEKLY_CAPACITY = 1050; // ~2.5h/day at avg focus 3, 7 days
+
+const fmtFocusMin = (m) => {
+  if (!m) return '0';
+  const h = Math.floor(m / 60);
+  const mins = m % 60;
+  if (h === 0) return `${mins}m`;
+  if (mins === 0) return `${h}h`;
+  return `${h}h${mins}m`;
+};
+
+// ─── Allocation Bar — stacked bar showing all goal allocations ──────────────
+
+function AllocationBar({ weeklyData, onGoalClick }) {
+  if (!weeklyData?.goals) return null;
+
+  const goals = weeklyData.goals.filter(g => g.weekly_target_minutes > 0);
+  const totalAllocated = weeklyData.totalAllocated || 0;
+  const capacity = REALISTIC_WEEKLY_CAPACITY;
+  const unallocated = Math.max(0, capacity - totalAllocated);
+
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+        <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10, flex: 1 }}>
+          Weekly Allocation
+        </Typography>
+        <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10, fontFamily: 'monospace' }}>
+          {fmtFocusMin(totalAllocated)} / {fmtFocusMin(capacity)} allocated
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', height: 20, borderRadius: 1, overflow: 'hidden', bgcolor: 'rgba(255,255,255,0.06)' }}>
+        {goals.map(g => {
+          const cfg = CONTEXT_CONFIG[g.context] || {};
+          const pct = (g.weekly_target_minutes / capacity) * 100;
+          return (
+            <Tooltip key={g.id} title={`${cfg.emoji || '🎯'} ${g.title}: ${fmtFocusMin(g.weekly_target_minutes)}`}>
+              <Box
+                onClick={() => onGoalClick?.(g.id)}
+                sx={{
+                  width: `${pct}%`,
+                  bgcolor: cfg.color || '#666',
+                  opacity: 0.7,
+                  cursor: 'pointer',
+                  transition: 'opacity 0.15s',
+                  '&:hover': { opacity: 1 },
+                  borderRight: '1px solid rgba(0,0,0,0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  overflow: 'hidden',
+                }}
+              >
+                {pct > 8 && (
+                  <Typography sx={{ fontSize: 9, color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {cfg.emoji}
+                  </Typography>
+                )}
+              </Box>
+            </Tooltip>
+          );
+        })}
+        {unallocated > 0 && (
+          <Tooltip title={`Unallocated: ${fmtFocusMin(unallocated)}`}>
+            <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {unallocated / capacity > 0.1 && (
+                <Typography sx={{ fontSize: 9, color: 'text.disabled' }}>
+                  {fmtFocusMin(unallocated)} free
+                </Typography>
+              )}
+            </Box>
+          </Tooltip>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+// ─── Weekly Target Slider ───────────────────────────────────────────────────
+
+function WeeklyTargetSlider({ value, currentId, weeklyData, onChange }) {
+  const [local, setLocal] = useState(value);
+  useEffect(() => setLocal(value), [value]);
+
+  const capacity = REALISTIC_WEEKLY_CAPACITY;
+  const otherAllocated = weeklyData?.goals
+    ? weeklyData.goals.reduce((sum, g) => sum + (g.id === currentId ? 0 : (g.weekly_target_minutes || 0)), 0)
+    : 0;
+  const remaining = Math.max(0, capacity - otherAllocated);
+
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+        Weekly target (focused minutes)
+      </Typography>
+      <Slider
+        value={local}
+        min={0}
+        max={remaining}
+        step={15}
+        onChange={(_, val) => setLocal(val)}
+        onChangeCommitted={(_, val) => onChange(val)}
+        size="small"
+        valueLabelDisplay="auto"
+        valueLabelFormat={fmtFocusMin}
+        sx={{ mt: 0.5 }}
+      />
+      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+        <Typography variant="caption" sx={{ fontSize: 10, color: 'text.disabled' }}>
+          {fmtFocusMin(local)}
+        </Typography>
+        <Typography variant="caption" sx={{ fontSize: 10, color: 'text.disabled' }}>
+          {fmtFocusMin(otherAllocated)} allocated elsewhere · {fmtFocusMin(remaining - local)} remaining
+        </Typography>
+      </Box>
+    </Box>
+  );
 }
 
 // ─── Treemap Cell ───────────────────────────────────────────────────────────
@@ -207,6 +329,7 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
   const isAction = d.type === 'action';
 
   const { data: narrative } = useProjectNarrative(isProject ? d.id : null);
+  const { data: weeklyData } = useWeeklyGoalProgress();
   const updateGoal = useUpdateGoal();
   const updateProject = useUpdateProject();
   const updateEpic = useUpdateEpic();
@@ -383,25 +506,15 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
 
       {/* Weekly time target — goals and projects */}
       {(isGoal || isProject) && (
-        <Box sx={{ mb: 2 }}>
-          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-            Weekly target (focused minutes)
-          </Typography>
-          <TextField
-            size="small"
-            type="number"
-            fullWidth
-            value={d.weekly_target_minutes || ''}
-            placeholder="e.g. 120"
-            onChange={(e) => {
-              const val = e.target.value ? parseInt(e.target.value) : 0;
-              if (isGoal) updateGoal.mutate({ id: d.id, weekly_target_minutes: val });
-              else updateProject.mutate({ id: d.id, weekly_target_minutes: val });
-            }}
-            sx={{ mt: 0.5, '& input': { fontSize: 13 } }}
-            slotProps={{ htmlInput: { min: 0, step: 15 } }}
-          />
-        </Box>
+        <WeeklyTargetSlider
+          value={d.weekly_target_minutes || 0}
+          currentId={d.id}
+          weeklyData={weeklyData}
+          onChange={(val) => {
+            if (isGoal) updateGoal.mutate({ id: d.id, weekly_target_minutes: val });
+            else updateProject.mutate({ id: d.id, weekly_target_minutes: val });
+          }}
+        />
       )}
 
       <Divider sx={{ mb: 2 }} />
@@ -462,8 +575,8 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
         </Box>
       )}
 
-      {/* Action detail — when an action is selected directly */}
-      {isAction && (
+      {/* Action/Epic detail — push to daily tasks */}
+      {(isAction || isEpic) && (
         <Box sx={{ mb: 2 }}>
           {d.estimated_minutes && (
             <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
@@ -534,6 +647,7 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
 
 export default function PlanningView({ initialGoalId } = {}) {
   const { data: treemapData, isLoading } = useGoalsTreemap();
+  const { data: weeklyData } = useWeeklyGoalProgress();
 
   // Navigation state: stack of drill-down levels
   // Each entry: { data, label }
@@ -719,6 +833,19 @@ export default function PlanningView({ initialGoalId } = {}) {
             ))}
           </Breadcrumbs>
         </Box>
+
+        {/* Allocation bar — weekly commitment overview */}
+        {navStack.length === 0 && (
+          <Box sx={{ mx: 2, mb: 1 }}>
+            <AllocationBar weeklyData={weeklyData} onGoalClick={(goalId) => {
+              const goal = findNodeInTree(treemapData, goalId);
+              if (goal) {
+                setNavStack([{ data: goal, label: goal.name }]);
+                setSelectedNode(goal);
+              }
+            }} />
+          </Box>
+        )}
 
         {/* Treemap — height scales with item count, capped */}
         <Box

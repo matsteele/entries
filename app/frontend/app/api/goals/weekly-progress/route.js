@@ -79,7 +79,10 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ goals });
+    // Compute total allocated across all goals
+    const totalAllocated = goals.reduce((sum, g) => sum + (g.weekly_target_minutes || 0), 0);
+
+    return NextResponse.json({ goals, totalAllocated });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
