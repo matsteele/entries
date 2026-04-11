@@ -99,10 +99,10 @@ function AllocationBar({ weeklyData, onGoalClick }) {
     <Box sx={{ mb: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
         <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10, flex: 1 }}>
-          Weekly Allocation
+          Weekly Allocation (focused minutes = time × focus level)
         </Typography>
         <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10, fontFamily: 'monospace' }}>
-          {fmtFocusMin(totalAllocated)} / {fmtFocusMin(capacity)} allocated
+          {fmtFocusMin(totalAllocated)} / {fmtFocusMin(capacity)} focused mins allocated
         </Typography>
       </Box>
       <Box sx={{ display: 'flex', height: 20, borderRadius: 1, overflow: 'hidden', bgcolor: 'rgba(255,255,255,0.06)' }}>
@@ -167,7 +167,7 @@ function WeeklyTargetSlider({ value, currentId, weeklyData, onChange }) {
   return (
     <Box sx={{ mb: 2 }}>
       <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-        Weekly target (focused minutes)
+        Weekly target (focused mins = time × focus level)
       </Typography>
       <Slider
         value={local}
