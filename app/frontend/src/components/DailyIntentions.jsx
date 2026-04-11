@@ -1,20 +1,125 @@
 import { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, TextField, Button, Chip, Stack,
-  Collapse, IconButton, Tooltip, Link,
+  Collapse, IconButton, Tooltip,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import EditIcon from '@mui/icons-material/Edit';
 import SaveIcon from '@mui/icons-material/Save';
-import FlagIcon from '@mui/icons-material/Flag';
 import LightbulbIcon from '@mui/icons-material/Lightbulb';
-import { useIntentions, useSaveIntentions } from '../hooks/useApi';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import AddIcon from '@mui/icons-material/Add';
+import LinkIcon from '@mui/icons-material/Link';
+import { useIntentions, useSaveIntentions, useTaskAction } from '../hooks/useApi';
 import { CONTEXT_CONFIG } from '../lib/contexts';
+
+const MATCH_ICONS = {
+  routine: '🔄',
+  goal: '🎯',
+  project: '🚀',
+  epic: '📦',
+  action: '⚡',
+  none: '❌',
+};
+
+function IntentionRow({ item, onNavigate, taskAction }) {
+  const cfg = CONTEXT_CONFIG[item.matchContext] || {};
+  const icon = MATCH_ICONS[item.matchType] || '•';
+  const actions = item.actions || [];
+  const busy = taskAction?.isPending;
+
+  const handleSwitch = () => {
+    if (item.routineTitle) {
+      // Use the CLI fuzzy search to switch to routine task
+      taskAction?.mutate({ action: 'switch-to-search', query: item.routineTitle });
+    }
+  };
+
+  const handleAdd = () => {
+    const ctx = Object.entries(CONTEXT_CONFIG).find(([, v]) => v.label?.toLowerCase() === item.matchContext)?.[1]?.code
+      || item.matchContext || 'proj';
+    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: ctx });
+  };
+
+  const handleStart = () => {
+    const ctx = Object.entries(CONTEXT_CONFIG).find(([, v]) => v.label?.toLowerCase() === item.matchContext)?.[1]?.code
+      || item.matchContext || 'proj';
+    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: ctx });
+  };
+
+  const handleLink = () => {
+    const id = item.goalId || item.matchId;
+    if (id && onNavigate) onNavigate('planning', { goalId: id });
+  };
+
+  return (
+    <Box sx={{
+      display: 'flex', alignItems: 'center', gap: 1, py: 0.75,
+      borderBottom: '1px solid rgba(255,255,255,0.04)',
+    }}>
+      <Typography sx={{ fontSize: 14, flexShrink: 0 }}>{icon}</Typography>
+      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontSize: 12, lineHeight: 1.3 }}>
+          {item.intention}
+        </Typography>
+        {item.matchTitle && (
+          <Typography variant="caption" sx={{ color: cfg.color || 'text.disabled', fontSize: 10 }}>
+            {cfg.emoji} {item.matchTitle}
+            {item.note && <span style={{ color: '#888' }}> — {item.note}</span>}
+          </Typography>
+        )}
+        {item.matchType === 'none' && (
+          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10 }}>
+            no match in hierarchy
+          </Typography>
+        )}
+      </Box>
+      <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
+        {actions.includes('switch') && (
+          <Tooltip title="Switch to this routine task">
+            <IconButton size="small" onClick={handleSwitch} disabled={busy}>
+              <PlayArrowIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+        {actions.includes('add') && (
+          <Tooltip title="Add to today's docket">
+            <IconButton size="small" onClick={handleAdd} disabled={busy}>
+              <AddIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+        {actions.includes('start') && (
+          <Tooltip title="Add and start now">
+            <IconButton size="small" onClick={handleStart} disabled={busy} sx={{ color: '#4CAF50' }}>
+              <PlayArrowIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+        {actions.includes('add-novel') && (
+          <Tooltip title="Add as novel task">
+            <IconButton size="small" onClick={handleAdd} disabled={busy}>
+              <AddIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+        {(actions.includes('link') || item.matchId || item.goalId) && (
+          <Tooltip title="View in Planning">
+            <IconButton size="small" onClick={handleLink}>
+              <LinkIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        )}
+      </Stack>
+    </Box>
+  );
+}
 
 export default function DailyIntentions({ date, onNavigate }) {
   const { data: intentions } = useIntentions(date);
   const saveIntentions = useSaveIntentions();
+  const taskAction = useTaskAction();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [expanded, setExpanded] = useState(true);
@@ -32,16 +137,14 @@ export default function DailyIntentions({ date, onNavigate }) {
       : intentions.goal_allocations)
     : null;
 
+  const outline = allocations?.outline || [];
+
   const handleSave = () => {
     if (!draft.trim()) return;
     saveIntentions.mutate(
       { date, morning_intention: draft.trim() },
       { onSuccess: () => setEditing(false) }
     );
-  };
-
-  const handleGoalClick = (goalId) => {
-    if (onNavigate) onNavigate('planning', { goalId });
   };
 
   if (!hasIntention && !editing) {
@@ -75,6 +178,10 @@ export default function DailyIntentions({ date, onNavigate }) {
         <Typography variant="subtitle2" sx={{ flexGrow: 1, color: '#FFB74D' }}>
           Daily Intentions
         </Typography>
+        {outline.length > 0 && !editing && (
+          <Chip label={`${outline.length} matched`} size="small" variant="outlined"
+            sx={{ fontSize: '0.6rem', height: 18, mr: 0.5 }} />
+        )}
         {hasIntention && !editing && (
           <Tooltip title="Edit">
             <IconButton size="small" onClick={(e) => { e.stopPropagation(); setEditing(true); }}>
@@ -100,7 +207,7 @@ export default function DailyIntentions({ date, onNavigate }) {
                 fullWidth
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Write your intentions for today in natural language... What do you want to focus on? What matters most?"
+                placeholder="Write your intentions for today in natural language..."
                 sx={{ mt: 1, '& textarea': { fontSize: 13, lineHeight: 1.6 } }}
                 autoFocus
               />
@@ -116,21 +223,31 @@ export default function DailyIntentions({ date, onNavigate }) {
             </Box>
           ) : (
             <Box>
-              {/* Narrative summary */}
+              {/* Narrative */}
               <Typography variant="body2" sx={{
-                mt: 1, mb: 1.5, fontSize: 12, lineHeight: 1.6,
-                color: 'text.secondary', whiteSpace: 'pre-wrap',
+                mt: 1, mb: 1, fontSize: 11, lineHeight: 1.5,
+                color: 'text.disabled', fontStyle: 'italic',
               }}>
                 {intentions?.morning_intention}
               </Typography>
 
-              {/* Matched goals */}
-              {allocations?.matched?.length > 0 && (
-                <Box sx={{ mb: 1.5 }}>
-                  <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
-                    <FlagIcon sx={{ fontSize: 12, mr: 0.5, verticalAlign: 'middle' }} />
-                    Matched Goals
-                  </Typography>
+              {/* Outline with matches */}
+              {outline.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  {outline.map((item, i) => (
+                    <IntentionRow
+                      key={i}
+                      item={item}
+                      onNavigate={onNavigate}
+                      taskAction={taskAction}
+                    />
+                  ))}
+                </Box>
+              )}
+
+              {/* Legacy: old-format matched goals (backwards compat) */}
+              {!outline.length && allocations?.matched?.length > 0 && (
+                <Box sx={{ mt: 1 }}>
                   <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
                     {allocations.matched.map((g, i) => {
                       const cfg = CONTEXT_CONFIG[g.context] || {};
@@ -140,33 +257,11 @@ export default function DailyIntentions({ date, onNavigate }) {
                           label={`${cfg.emoji || '🎯'} ${g.title}`}
                           size="small"
                           variant="outlined"
-                          onClick={() => handleGoalClick(g.goalId)}
-                          sx={{
-                            fontSize: '0.7rem',
-                            cursor: 'pointer',
-                            borderColor: cfg.color || '#666',
-                            '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
-                          }}
+                          onClick={() => onNavigate?.('planning', { goalId: g.goalId })}
+                          sx={{ fontSize: '0.7rem', cursor: 'pointer', borderColor: cfg.color || '#666' }}
                         />
                       );
                     })}
-                  </Stack>
-                </Box>
-              )}
-
-              {/* Suggested goals */}
-              {allocations?.suggested?.length > 0 && (
-                <Box>
-                  <Typography variant="caption" sx={{ color: 'text.disabled', display: 'block', mb: 0.5 }}>
-                    <LightbulbIcon sx={{ fontSize: 12, mr: 0.5, verticalAlign: 'middle' }} />
-                    Potential Goals (not yet tracked)
-                  </Typography>
-                  <Stack spacing={0.25}>
-                    {allocations.suggested.map((s, i) => (
-                      <Typography key={i} variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem', pl: 1 }}>
-                        • {s}
-                      </Typography>
-                    ))}
                   </Stack>
                 </Box>
               )}
