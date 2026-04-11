@@ -255,36 +255,11 @@ function main() {
     // Normal heartbeat, no idle gap
     const current = loadCurrent();
 
-    // If we were in idle with a routine task running, pause it now that user is back
-    // But never auto-pause rest context tasks (sleeping/resting)
-    const isRestReturn = current.task && (current.task.activityContext === 'rest' || current.task.title === 'sleeping' || current.task.title === 'resting');
-    if (heartbeat.lastAction === 'idle-detected-routine' && current.task && current.task.sourceType === 'routine' && !isRestReturn) {
-      const taskDesc = current.task.title === 'general'
-        ? `${current.task.activityContext} (context)`
-        : `"${current.task.title}"`;
-
-      // End the routine task at now (includes idle time, assuming you were doing that activity during idle)
-      autoPauseTask(current, now);
-      saveCurrent(current);
-
-      log(`Paused routine task on return from idle: ${taskDesc}`);
-
-      // Now show picker to switch to next task
-      const pending = loadPending();
-      if (pending.length > 0) {
-        log('Showing return-from-idle task picker');
-        const selectedIndex = showReturnFromIdleDialog(pending);
-        if (selectedIndex >= 0) {
-          const reloaded = loadCurrent();
-          const taskTitle = switchToSelectedTask(reloaded, pending, selectedIndex);
-          if (taskTitle) {
-            saveCurrent(reloaded);
-            log(`Switched to "${taskTitle}" via return-from-idle picker`);
-          }
-        } else {
-          log('User dismissed return-from-idle picker');
-        }
-      }
+    // Routine tasks are NEVER auto-paused — they represent ambient activities
+    // (eating, sleeping, transit, etc.) that continue through idle periods.
+    // Just reset the idle state back to normal heartbeat.
+    if (heartbeat.lastAction === 'idle-detected-routine') {
+      log(`Returned from idle with routine task running: "${current.task?.title}" — not pausing`);
     }
 
     saveHeartbeat({ lastHeartbeat: nowISO, lastAction: 'heartbeat' });
