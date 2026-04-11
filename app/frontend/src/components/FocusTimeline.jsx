@@ -120,6 +120,7 @@ function SessionReassignPopover({ anchorEl, onClose, segment, pending, routine }
       onClose={onClose}
       anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
       transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      slotProps={{ paper: { sx: { mb: 1 } } }}
       onClick={(e) => e.stopPropagation()}
     >
       <Box sx={{ width: 320, maxHeight: 440 }}>
@@ -896,7 +897,7 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
           const canEdit = isLive && !seg.isGap && seg.sourceFile !== 'postgres' && !!seg.taskId;
           const canReassign = !seg.isGap && !!seg.taskId;
           return (
-            <Tooltip key={i} title={<span style={{whiteSpace:'pre-line'}}>{tipLabel}</span>} arrow placement="top" disableHoverListener={!!dragOverride || !!reassignAnchor}>
+            <Tooltip key={i} title={reassignAnchor || dragOverride ? '' : <span style={{whiteSpace:'pre-line'}}>{tipLabel}</span>} placement="top" followCursor>
               <Box
                 onClick={canReassign ? (e) => {
                   if (wasDraggingRef.current) return; // don't open after drag
@@ -1040,7 +1041,7 @@ export default function FocusTimeline({ onNavigate } = {}) {
         const pctActiveFocus = awakeTrackedMs > 60000 ? Math.min(100, Math.round((activeMs / awakeTrackedMs) * 100)) : (summary.pctActive || 0);
         return (
           <Stack direction="row" spacing={1.5} sx={{ mb: 2 }}>
-            <StatCard label="Focused Minutes" value={`${summary.focusedMins}m`} sub="Σ focus×mins, f>0" />
+            <StatCard label="Focused Minutes" value={`${summary.focusedMins}fm`} sub="Σ focus×mins, f>0" />
             <StatCard label="Tracked" value={`${summary.pctTracked}%`} sub="of day" />
             <StatCard label="Active Focus" value={`${pctActiveFocus}%`} sub="awake tracked time at f>0" />
           </Stack>
@@ -1113,6 +1114,7 @@ export default function FocusTimeline({ onNavigate } = {}) {
               tasks={ctxTasks}
               daySums={daySums}
               action={taskAction}
+              onNavigate={onNavigate}
             />
           );
         })}

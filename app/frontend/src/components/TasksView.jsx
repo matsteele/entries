@@ -168,7 +168,7 @@ export function ActiveTask({ task, action, pending, routine }) {
             </Tooltip>
           )}
         </Stack>
-        {(task.goalTitle || task.projectTitle || task.epicTitle) && (
+        {(task.projectId || task.epicId) && (
           <Typography variant="caption" color="text.disabled" sx={{ mt: 0.75, display: 'block' }}>
             {[task.goalTitle, task.projectTitle, task.epicTitle].filter(Boolean).join(' / ')}
           </Typography>
@@ -269,8 +269,20 @@ export function ActiveTask({ task, action, pending, routine }) {
   );
 }
 
-export function TaskRow({ task, action }) {
+export function TaskRow({ task, action, onNavigate }) {
   const busy = action.isPending;
+  const hasLineage = task.projectId || task.epicId;
+
+  const handleBreadcrumbClick = (e) => {
+    e.stopPropagation();
+    if (!onNavigate) return;
+    // Navigate to the most specific level available
+    if (task.epicId) {
+      onNavigate('planning', { goalId: task.goalId || task.projectId });
+    } else if (task.projectId) {
+      onNavigate('planning', { goalId: task.goalId || task.projectId });
+    }
+  };
 
   return (
     <ListItem
@@ -285,8 +297,17 @@ export function TaskRow({ task, action }) {
         </Tooltip>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
           <Typography variant="body2" sx={{ lineHeight: 1.4 }}>{task.title}</Typography>
-          {(task.goalTitle || task.projectTitle || task.epicTitle) && (
-            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem' }}>
+          {hasLineage && (
+            <Typography
+              variant="caption"
+              onClick={handleBreadcrumbClick}
+              sx={{
+                fontSize: '0.6rem',
+                color: 'text.disabled',
+                cursor: onNavigate ? 'pointer' : 'default',
+                '&:hover': onNavigate ? { color: '#90CAF9', textDecoration: 'underline' } : {},
+              }}
+            >
               {[task.goalTitle, task.projectTitle, task.epicTitle].filter(Boolean).join(' / ')}
             </Typography>
           )}
@@ -411,7 +432,7 @@ export function CompletedStrip({ completed }) {
   );
 }
 
-export function ContextGroup({ context, tasks, daySums, action }) {
+export function ContextGroup({ context, tasks, daySums, action, onNavigate }) {
   const [open, setOpen] = useState(true);
   const cfg = CONTEXT_CONFIG[context] || {};
   const contextMinutes = daySums?.[context] || 0;
@@ -443,6 +464,7 @@ export function ContextGroup({ context, tasks, daySums, action }) {
               key={t.id || i}
               task={t}
               action={action}
+              onNavigate={onNavigate}
             />
           ))}
         </List>
