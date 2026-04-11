@@ -1070,12 +1070,6 @@ export default function FocusTimeline({ onNavigate } = {}) {
         onSave={(date, quality) => saveQualityMutation.mutate({ date, quality })}
       />
 
-      {/* Daily intentions — write narrative, match goals */}
-      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
-
-      {/* Weekly goal progress + today's focused minutes */}
-      <WeeklyGoalsProgress />
-
       {/* Task management widgets */}
       <Box sx={{ mt: 2, maxWidth: 900 }}>
         <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1.5 }}>
@@ -1117,6 +1111,12 @@ export default function FocusTimeline({ onNavigate } = {}) {
         })}
         <CompletedStrip completed={tasksData?.completed} />
       </Box>
+
+      {/* Daily intentions — write narrative, match goals */}
+      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
+
+      {/* Weekly goal progress + today's focused minutes */}
+      <WeeklyGoalsProgress />
 
       <ProtocolDrawer query={drawerBlock?.protocol} label={drawerBlock?.label} onClose={() => setDrawerBlock(null)} />
       <MealDrawer slot={mealSlot} slotData={activeSlotData} meals={mealsData?.meals} onSelect={handleMealSelect} onClose={() => setMealSlot(null)} />
