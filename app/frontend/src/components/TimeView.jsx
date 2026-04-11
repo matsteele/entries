@@ -3,8 +3,8 @@ import {
   Box, Typography, Paper, LinearProgress, Stack, Chip, ToggleButtonGroup, ToggleButton,
 } from '@mui/material';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-  ComposedChart, Line, Legend,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ComposedChart, Bar, Line, Legend,
 } from 'recharts';
 import { useTimeSums, useTimeHistory } from '../hooks/useApi';
 import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
@@ -37,37 +37,12 @@ function PeriodBreakdown({ title, sums }) {
 
   const total = Object.values(sums).reduce((a, b) => a + b, 0);
 
-  const chartData = CONTEXT_ORDER
-    .filter((ctx) => (sums[ctx] || 0) > 0)
-    .map((ctx) => ({
-      name: CONTEXT_CONFIG[ctx]?.label || ctx,
-      minutes: Math.round(sums[ctx] || 0),
-      color: CONTEXT_CONFIG[ctx]?.color || '#666',
-    }));
-
   return (
     <Paper sx={{ p: 2, mb: 2 }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
         <Typography variant="h6">{title}</Typography>
         <Chip label={formatMinutes(total)} size="small" color="primary" />
       </Stack>
-
-      {chartData.length > 0 && (
-        <Box sx={{ height: 180, mb: 2 }}>
-          <ResponsiveContainer>
-            <BarChart data={chartData} layout="vertical" margin={{ left: 80 }}>
-              <XAxis type="number" tickFormatter={(v) => formatMinutes(v)} />
-              <YAxis type="category" dataKey="name" width={80} />
-              <Tooltip formatter={(v) => formatMinutes(v)} />
-              <Bar dataKey="minutes" radius={[0, 4, 4, 0]}>
-                {chartData.map((d, i) => (
-                  <Cell key={i} fill={d.color} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </Box>
-      )}
 
       {CONTEXT_ORDER.map((ctx) => {
         const mins = sums[ctx] || 0;
@@ -107,7 +82,7 @@ function BudgetCard({ budget }) {
 }
 
 const PERIOD_LABELS = { day: 'Daily', week: 'Weekly', month: 'Monthly' };
-const HISTORY_N = { day: 14, week: 8, month: 6 };
+const HISTORY_N = { day: 7, week: 8, month: 6 };
 
 function HistoryChart({ period }) {
   const n = HISTORY_N[period] || 7;
@@ -176,7 +151,7 @@ function HistoryChart({ period }) {
 
 export default function TimeView() {
   const { data, isLoading, error } = useTimeSums();
-  const [histPeriod, setHistPeriod] = useState('day');
+  const [histPeriod, setHistPeriod] = useState('week');
 
   if (isLoading) return <LinearProgress />;
   if (error) return <Typography color="error">Error: {error.message}</Typography>;
@@ -185,14 +160,8 @@ export default function TimeView() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 2 }}>Time Tracking</Typography>
-      <BudgetCard budget={budget} />
-      <PeriodBreakdown title="Today" sums={sums?.day} />
-      <PeriodBreakdown title="This Week" sums={sums?.week} />
-      <PeriodBreakdown title="This Month" sums={sums?.month} />
-
-      <Stack direction="row" alignItems="center" spacing={2} sx={{ mt: 3, mb: 1 }}>
-        <Typography variant="h6">Historical</Typography>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+        <Typography variant="h5">Time Tracking</Typography>
         <ToggleButtonGroup
           size="small"
           value={histPeriod}
@@ -205,6 +174,10 @@ export default function TimeView() {
         </ToggleButtonGroup>
       </Stack>
       <HistoryChart period={histPeriod} />
+      <BudgetCard budget={budget} />
+      <PeriodBreakdown title="Today" sums={sums?.day} />
+      <PeriodBreakdown title="This Week" sums={sums?.week} />
+      <PeriodBreakdown title="This Month" sums={sums?.month} />
     </Box>
   );
 }

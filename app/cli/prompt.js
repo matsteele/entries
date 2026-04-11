@@ -5,7 +5,7 @@
  * Output: [context: task name] or empty if no current task
  */
 
-const { CONTEXT_EMOJI_MAP, loadCurrent } = require('./task-store');
+const { CONTEXT_EMOJI_MAP, loadCurrent } = require('../backend/task-store');
 
 // ANSI color codes for contexts
 const CONTEXT_COLORS = {
@@ -15,6 +15,7 @@ const CONTEXT_COLORS = {
   cultivo: '\x1b[42m',
   projects: '\x1b[45m',
   health: '\x1b[41m',
+  learning: '\x1b[46m',
   unstructured: '\x1b[103m'
 };
 

@@ -1,4 +1,4 @@
-const { semanticSearch, pool } = require('./embeddings');
+const { semanticSearch, pool } = require('../backend/embeddings');
 
 async function main() {
   const args = process.argv.slice(2);

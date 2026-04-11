@@ -15,7 +15,7 @@ const {
   loadPending, loadRoutine, loadCurrent,
   calculateElapsedMinutes, formatTimeSpent,
   getDisplayOrderedTasks, getCompletedTodayCount
-} = require('./task-store');
+} = require('../backend/task-store');
 
 // ANSI color codes for contexts
 const CONTEXT_BG = {
@@ -25,7 +25,9 @@ const CONTEXT_BG = {
   cultivo: '\x1b[42m',       // Green background
   projects: '\x1b[45m',      // Magenta background
   health: '\x1b[41m',        // Red background
-  unstructured: '\x1b[103m'  // Bright yellow background
+  rest: '\x1b[48;5;54m',     // Dark purple background
+  learning: '\x1b[46m',       // Cyan background
+  unstructured: '\x1b[48;5;130m' // Dark orange background
 };
 
 const RESET = '\x1b[0m';
@@ -105,10 +107,18 @@ if (pendingTasks.length > 0) {
     const emoji = CONTEXT_EMOJI_MAP[context] || '💼';
     const timeSpent = task.timeSpent || 0;
 
+    const focusLevel = task.focusLevel != null ? task.focusLevel : null;
+    const priority = task.priority != null ? task.priority : null;
+    const meta = [
+      focusLevel != null ? `f:${focusLevel}` : null,
+      priority != null ? `p:${priority}` : null,
+    ].filter(Boolean).join(' ');
+    const metaStr = meta ? ` ${DIM}${meta}${RESET}` : '';
+
     if (timeSpent > 0) {
-      console.log(`  ${idx + 1}. ${emoji} ${BROWN}${timeSpent}m${RESET} ${title}`);
+      console.log(`  ${idx + 1}. ${emoji} ${BROWN}${timeSpent}m${RESET}${metaStr} ${title}`);
     } else {
-      console.log(`  ${idx + 1}. ${emoji} ${title}`);
+      console.log(`  ${idx + 1}. ${emoji}${metaStr} ${title}`);
     }
   });
 } else {

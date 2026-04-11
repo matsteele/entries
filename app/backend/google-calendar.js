@@ -14,6 +14,7 @@ const CONTEXT_EMOJI_MAP = {
   cultivo: '🌱',
   projects: '🚀',
   health: '💪',
+  learning: '📚',
   unstructured: '☀️'
 };
 
@@ -25,6 +26,7 @@ const CONTEXT_COLOR_MAP = {
   social: '3',        // Grape (purple)
   projects: '6',      // Tangerine (orange)
   health: '10',       // Basil (dark green)
+  learning: '4',      // Flamingo (pink)
   unstructured: '8'   // Graphite (gray)
 };
 

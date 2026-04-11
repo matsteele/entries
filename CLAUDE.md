@@ -60,7 +60,7 @@ Plans (Database - full narrative)
 1. User reviews Google Tasks and sets due dates for today
 2. User runs `/t pull-goog` to pull tasks due today into terminal daily log
 3. Tasks appear in daily log with appropriate context (per/cul/prof/soc/proj/heal)
-4. **TODO**: Tasks sync to Google Calendar for time management
+4. Tasks appear on FocusTimeline; Google Calendar events pulled as overlay for appointments/reminders
 5. User works on tasks, updates via `/t` commands
 6. Completed tasks logged with time tracking by context
 
@@ -96,6 +96,40 @@ When you run `/t addS "task description"` or `/t -N` to switch to a task, you ar
 **Exception:** If you explicitly ask Claude to work on something (e.g., *"Please implement feature X"* without switching to it in `/t`), then Claude can take the task and own the work.
 
 **Command Execution:** When you issue a command (especially `/t` commands), Claude should execute it directly without interpretation, asking clarifying questions, or offering alternatives—unless you explicitly ask Claude to interpret or suggest changes.
+
+---
+
+## Planning Mode (--- delimiter)
+
+**Trigger:** When you start a prompt with `---` (three dashes), you're entering **planning mode**.
+
+**What this means:**
+- You're externalizing your thinking about your day in long-form prose
+- You want me to help organize and structure that thinking using available tools
+- You're NOT asking me to implement anything or change code
+- You're NOT asking me to start working on discussed plans
+
+**What I should do in planning mode:**
+- Listen to your full discussion without interruption
+- Use available tools to structure your thinking:
+  - Add/modify tasks via `/t` commands
+  - Switch current task or add notes
+  - Update PostgreSQL protocols and plans
+  - Query database for related information
+  - Execute any CLAUDE.md operations (sessions, daily updates, etc.)
+- Help organize ideas into actionable items
+- Provide relevant context from your existing plans/protocols
+
+**What I should NOT do in planning mode:**
+- Start analyzing implementation details of discussed projects
+- Begin planning code changes or architecture
+- Write code or create pull requests
+- Assume you need technical help and jump in
+- Create project plans for things you're planning to do (you're doing that, I'm organizing)
+
+**When to exit planning mode:** Once you explicitly ask me to implement something (e.g., "Please write the feature", "Help me code this"), OR when you run `/t c-N` to complete and switch away from planning.
+
+**Why this matters:** Planning mode is about orchestration and organization, not execution. You're taking ownership of the work; I'm helping you structure your thinking about it.
 
 ---
 
@@ -257,15 +291,16 @@ Local task tracking for **focused work**. Tasks persist across days in 4 split f
 For full command reference, context auto-detection keywords, routine vs novel tasks, and time budget details, see **[tracking/SESSION_ACTIVITY_TRACKING.md](./tracking/SESSION_ACTIVITY_TRACKING.md)**. For the command quick-reference table, see **[ARCHITECTURE.md](./ARCHITECTURE.md#t-command-reference)**.
 
 **Key commands:**
-- `/t add "task" [context] [r]` - Add task (optional context code, trailing `r` = routine)
-- `/t addS "task" [context]` - Add task and immediately switch to it
+- `/t add "task" [context] [p:N] [f:N] [r]` - Add task (optional context code, `p:1-5` priority, `f:0-5` focus, trailing `r` = routine)
+- `/t addS "task" [context] [p:N] [f:N]` - Add task and immediately switch to it
 - `/t -N` / `/t c-N` / `/t cs-N` / `/t d-N` - Switch / complete / complete+switch / delete
 - `/t last HH:MM` - Set end time of last task (e.g., `/t last 6:50`, only when no task is active)
 - `/t last-N` - Reassign idle time to task N
 - `/t note "text"` - Add note to current task
 - `/t note-pending N "text"` - Add note to pending task N
 - `/t r` - Toggle routine/novel view
-- `/t per|soc|prof|cul|proj|heal|us|all` - Context filter
+- `/t ? <search>` - Fuzzy search tasks by title and switch to best match
+- `/t per|soc|prof|cul|proj|heal|learn|us|all` - Context filter
 - `/t jira` / `/t pull-goog` - Pull from Jira / Google Tasks
 - `/t rest` / `/t wake` - Sleep journaling (pre-sleep wind-down / post-sleep reflection)
 - `/t eeh` - Distraction journaling (quick check-in, does NOT pause current task)
@@ -293,7 +328,7 @@ When the user says `/t log-session`, Claude should:
 
 1. **Read the daily log** to see current + pending tasks (all views):
    ```bash
-   node ~/projects/currentProjects/entries/app/backend/statusline.js
+   node ~/projects/currentProjects/entries/app/cli/statusline.js
    ```
 
 2. **Analyze the conversation** to determine:
@@ -307,7 +342,7 @@ When the user says `/t log-session`, Claude should:
 
 4. **Call the CLI** with the match result:
    ```bash
-   node ~/projects/currentProjects/entries/app/backend/daily-log-cli.js log-session '{"title":"...","context":"proj","summary":"...","startedAt":"2026-02-08T05:00:00Z","endedAt":"2026-02-08T07:00:00Z","match":"current"}'
+   node ~/projects/currentProjects/entries/app/cli/daily-log-cli.js log-session '{"title":"...","context":"proj","summary":"...","startedAt":"2026-02-08T05:00:00Z","endedAt":"2026-02-08T07:00:00Z","match":"current"}'
    ```
 
    The `match` field determines how the session is recorded:
@@ -487,9 +522,9 @@ Always apply to entries. See **[ARCHITECTURE.md](./ARCHITECTURE.md#contexts)** f
 - **Health** (`heal`) - Sleep, meals, hygiene, exercise, medical
 - **Personal** (`per`) - Feelings, reflections, growth, family, errands
 - **Social** (`soc`) - Relationships, conversations, social activities
-- **Professional** (`prof`) - Work, meetings, career (non-Cultivo)
-- **Cultivo** (`cul`) - Cultivo-specific work
+- **Professional** (`prof`/`cul`) - All work: Cultivo and other professional work combined. Both Cultivo tasks and non-Cultivo professional activities use the "professional" context in the journal. Note: Daily task tracking uses both `prof` and `cul` codes for time budget purposes, but journal entries consolidate both under "professional" context.
 - **Projects** (`proj`) - Personal projects, side work
+- **Learning** (`learn`) - Courses, tutorials, research, studying, reading (doesn't need daily completion)
 - **Unstructured** (`us`) - Leisure, free time, browsing
 
 ---
@@ -536,6 +571,33 @@ See full protocol: `protocols/digesting-entries.md`
 Track activities during sessions for end-of-day debriefs. Update daily log periodically.
 
 For full details on session behavior, JSON structure, activity types, and NPM commands, see **[tracking/SESSION_ACTIVITY_TRACKING.md](./tracking/SESSION_ACTIVITY_TRACKING.md)**.
+
+---
+
+## Email Review Protocol
+
+**Trigger:** User says "let's go through emails", "check my email", "email review", or similar.
+
+**Follow the Email Review protocol stored in the database** (`protocols` table, title: "Email Review"). The protocol covers:
+
+1. **Fetch** unread + starred emails
+2. **Categorize** into Marketing / Informational / Jobs / Needs Attention
+3. **Bulk actions** — trash marketing/informational, label+unstar jobs
+4. **Process attention emails** — create tasks, draft replies, or unstar
+5. **Verify** inbox state (goal: inbox zero)
+
+**Key tools:**
+- Gmail MCP: `mcp__gmail__gmail_searchMessages`, `mcp__gmail__gmail_readMessage`, `mcp__gmail__gmail_sendMessage`
+- Gmail CLI: `node app/cli/gmail-cli.js <command>` — trash, star, unstar, label, archive, read, task
+- Email-to-task: `node app/cli/gmail-cli.js task <emailId,...> <googleTasksListId>`
+  - Creates Google Task with email subject as title, sender + Gmail link in notes
+  - List IDs stored in the Email Review protocol in the database
+
+**Critical rules:**
+- Never unstar non-job emails without explicit user confirmation
+- Always present categories before taking action
+- Stars mean "unprocessed" — once dealt with, unstar
+- Job emails get `jobs` label + unstarred automatically
 
 ---
 

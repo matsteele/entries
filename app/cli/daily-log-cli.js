@@ -47,6 +47,34 @@ const {
 
 const TODAY = getLocalDate();
 
+// ─── Google Tasks completion sync (best-effort) ────────────────────────────
+function syncGoogleTaskCompletion(task) {
+  if (!task?.googleTaskId || !task?.googleTaskListId) return;
+  try {
+    const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN } = process.env;
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) return;
+    const { execSync } = require('child_process');
+    const tokenRes = execSync(
+      `curl -s -X POST https://oauth2.googleapis.com/token ` +
+      `-d client_id="${GOOGLE_CLIENT_ID}" ` +
+      `-d client_secret="${GOOGLE_CLIENT_SECRET}" ` +
+      `-d refresh_token="${GOOGLE_REFRESH_TOKEN}" ` +
+      `-d grant_type=refresh_token`,
+      { encoding: 'utf8', timeout: 5000 }
+    );
+    const accessToken = JSON.parse(tokenRes).access_token;
+    if (!accessToken) return;
+    execSync(
+      `curl -s -X PATCH ` +
+      `-H "Authorization: Bearer ${accessToken}" ` +
+      `-H "Content-Type: application/json" ` +
+      `-d '{"status":"completed"}' ` +
+      `"https://www.googleapis.com/tasks/v1/lists/${task.googleTaskListId}/tasks/${task.googleTaskId}"`,
+      { encoding: 'utf8', timeout: 5000 }
+    );
+  } catch (e) { /* best-effort — don't block task completion */ }
+}
+
 // ─── Core helper: end the active session on current task ────────────────────
 
 /**
@@ -125,6 +153,49 @@ function getViewTasks(current) {
   const viewMode = current.viewMode || 'novel';
   const tasks = viewMode === 'routine' ? loadRoutine() : loadPending();
   return getDisplayOrderedTasks(tasks, current.contextFilter);
+}
+
+/**
+ * Resolve a task ID to its 1-based display number in the unfiltered list.
+ * Searches pending first, then routine. Returns { number, viewMode } or null.
+ * Temporarily sets current viewMode/contextFilter so the existing numbered
+ * functions work correctly, and returns a cleanup function to restore state.
+ */
+function prepareByIdContext(taskId) {
+  const pendingOrdered = getDisplayOrderedTasks(loadPending(), null);
+  let idx = pendingOrdered.findIndex(t => t.id === taskId);
+  if (idx !== -1) {
+    return { number: idx + 1, viewMode: 'novel' };
+  }
+  const routineOrdered = getDisplayOrderedTasks(loadRoutine(), null);
+  idx = routineOrdered.findIndex(t => t.id === taskId);
+  if (idx !== -1) {
+    return { number: idx + 1, viewMode: 'routine' };
+  }
+  return null;
+}
+
+function withIdContext(taskId, fn) {
+  const resolved = prepareByIdContext(taskId);
+  if (!resolved) {
+    console.error(`\n❌ Task not found: ${taskId}\n`);
+    process.exit(1);
+  }
+  const current = loadCurrent();
+  const savedView = current.viewMode;
+  const savedFilter = current.contextFilter;
+  current.viewMode = resolved.viewMode;
+  current.contextFilter = null;
+  saveCurrent(current);
+  fn(resolved.number);
+  // Note: some functions (switchToTask) overwrite contextFilter themselves, which is correct.
+  // For others (setTaskFocus, etc.) we restore the original filter.
+  const after = loadCurrent();
+  if (after.viewMode === resolved.viewMode && after.contextFilter === null) {
+    after.viewMode = savedView;
+    after.contextFilter = savedFilter;
+    saveCurrent(after);
+  }
 }
 
 // ─── Task switching ─────────────────────────────────────────────────────────
@@ -475,6 +546,14 @@ function completeCurrentTask(newTaskDescription = null) {
     return;
   }
 
+  // Grab Google Task metadata before completion moves the task
+  let googleMeta = null;
+  if (task.sourceId) {
+    const pending = loadPending();
+    const src = pending.find(t => t.id === task.sourceId);
+    if (src?.googleTaskId) googleMeta = src;
+  }
+
   const endResult = endCurrentSession(current, now);
 
   if (endResult) {
@@ -488,6 +567,7 @@ function completeCurrentTask(newTaskDescription = null) {
   saveCurrent(current);
 
   incrementCompletedToday();
+  syncGoogleTaskCompletion(googleMeta);
 
   const emoji = CONTEXT_EMOJI_MAP[task.activityContext] || '💼';
   const timeStr = formatTimeSpent(endResult ? endResult.totalTimeSpent : 0);
@@ -539,6 +619,7 @@ function completeTaskByNumber(taskNumber) {
   current.contextSums = calculateContextSums();
   saveCurrent(current);
   incrementCompletedToday();
+  syncGoogleTaskCompletion(taskToComplete);
 
   const emoji = CONTEXT_EMOJI_MAP[taskToComplete.activityContext] || '💼';
   const timeStr = taskToComplete.timeSpent > 0 ? ` (${formatTimeSpent(taskToComplete.timeSpent)})` : '';
@@ -742,16 +823,16 @@ function parseTaskFlags(description, currentContextFilter) {
   }
 
   // Try --c flag format
-  const flagMatch = cleanDesc.match(/--c[=\s]+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)/i);
+  const flagMatch = cleanDesc.match(/--c[=\s]+(per|soc|prof|cul|proj|heal|learn|us|personal|social|professional|cultivo|projects|health|learning|unstructured)/i);
   if (flagMatch) {
     contextOverride = normalizeContext(flagMatch[1]);
-    cleanDesc = cleanDesc.replace(/--c[=\s]+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)/gi, '').trim();
+    cleanDesc = cleanDesc.replace(/--c[=\s]+(per|soc|prof|cul|proj|heal|learn|us|personal|social|professional|cultivo|projects|health|learning|unstructured)/gi, '').trim();
   } else {
     // Try trailing context code
-    const simpleMatch = cleanDesc.match(/\s+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i);
+    const simpleMatch = cleanDesc.match(/\s+(per|soc|prof|cul|proj|heal|learn|us|personal|social|professional|cultivo|projects|health|learning|unstructured)$/i);
     if (simpleMatch) {
       contextOverride = normalizeContext(simpleMatch[1]);
-      cleanDesc = cleanDesc.replace(/\s+(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i, '').trim();
+      cleanDesc = cleanDesc.replace(/\s+(per|soc|prof|cul|proj|heal|learn|us|personal|social|professional|cultivo|projects|health|learning|unstructured)$/i, '').trim();
     }
   }
 
@@ -1551,6 +1632,190 @@ function setLastTaskEndTime(timeStr) {
   console.log(`   Duration: ${oldTimeStr} → ${newTimeStr}\n`);
 }
 
+// ─── Reassign last session ───────────────────────────────────────────────────
+
+/**
+ * Finds the most recently-ended session across pending, routine, and completed tasks.
+ * Returns { taskId, sourceFile, session, sessionIndex } or null.
+ */
+function findMostRecentSession() {
+  const pending = loadPending();
+  const routine = loadRoutine();
+  const completed = loadCompleted();
+
+  let best = null;
+
+  const check = (tasks, sourceFile) => {
+    for (const task of tasks) {
+      const sessions = task.sessions || [];
+      sessions.forEach((s, idx) => {
+        if (!s.endedAt) return;
+        if (!best || new Date(s.endedAt) > new Date(best.session.endedAt)) {
+          best = { taskId: task.id, sourceFile, task, session: s, sessionIndex: idx };
+        }
+      });
+    }
+  };
+
+  check(pending, 'pending');
+  check(routine, 'routine');
+  check(completed, 'completed');
+
+  // Also check current.json for an active session
+  const current = loadCurrent();
+  if (current.task) {
+    const curSessions = current.task.sessions || [];
+    // The active session startedAt is current.task.startedAt; no endedAt yet — skip for "last"
+    curSessions.forEach((s, idx) => {
+      if (!s.endedAt) return;
+      if (!best || new Date(s.endedAt) > new Date(best.session.endedAt)) {
+        best = { taskId: current.task.sourceId, sourceFile: 'current', task: current.task, session: s, sessionIndex: idx };
+      }
+    });
+  }
+
+  return best;
+}
+
+/**
+ * Reassign the most recent completed session to a target task.
+ * Removes the session+time from the source task and adds to target.
+ * targetSpec: { type: 'number', value: N } | { type: 'fuzzy', query: string } | { type: 'new', description: string }
+ */
+function reassignLastSession(targetSpec) {
+  const current = loadCurrent();
+  const now = new Date();
+  const timestamp = now.toISOString();
+
+  const mostRecent = findMostRecentSession();
+  if (!mostRecent) {
+    console.error('\n❌ No completed sessions found to reassign.\n');
+    process.exit(1);
+  }
+
+  const { taskId: sourceTaskId, sourceFile, session, task: sourceTask } = mostRecent;
+  const elapsedMinutes = calculateElapsedMinutesUntil(session.startedAt, new Date(session.endedAt));
+
+  // Determine target task
+  let targetTask = null;
+  let targetIsNew = false;
+  let newTaskDesc = null;
+  let newTaskId = null;
+
+  if (targetSpec.type === 'number') {
+    const displayTasks = getViewTasks(current);
+    const taskIndex = targetSpec.value - 1;
+    if (taskIndex < 0 || taskIndex >= displayTasks.length) {
+      console.error(`\n❌ Invalid task number. You have ${displayTasks.length} tasks in the current view.\n`);
+      process.exit(1);
+    }
+    targetTask = displayTasks[taskIndex];
+  } else if (targetSpec.type === 'fuzzy') {
+    const routine = loadRoutine().filter(t => t.title !== 'general');
+    const pending = loadPending();
+    const allTasks = [...routine, ...pending];
+    const matches = findBestMatches(targetSpec.query.toLowerCase().trim(), allTasks);
+    if (matches.length === 0) {
+      console.error(`\n❌ No tasks found matching "${targetSpec.query}"\n`);
+      process.exit(1);
+    }
+    targetTask = matches[0];
+    const emoji = CONTEXT_EMOJI_MAP[targetTask.activityContext] || '📋';
+    console.log(`\n🔍 Found: ${emoji} ${targetTask.title}`);
+  } else if (targetSpec.type === 'new') {
+    // Create new task and assign session to it
+    targetIsNew = true;
+    newTaskDesc = targetSpec.description;
+  }
+
+  // 1. Remove session from source task
+  if (sourceFile === 'pending') {
+    const pending = loadPending();
+    const idx = pending.findIndex(t => t.id === sourceTaskId);
+    if (idx !== -1) {
+      pending[idx].sessions = (pending[idx].sessions || []).filter((_, i) => i !== mostRecent.sessionIndex);
+      pending[idx].timeSpent = Math.max(0, (pending[idx].timeSpent || 0) - elapsedMinutes);
+      savePending(pending);
+    }
+  } else if (sourceFile === 'routine') {
+    const routine = loadRoutine();
+    const idx = routine.findIndex(t => t.id === sourceTaskId);
+    if (idx !== -1) {
+      routine[idx].sessions = (routine[idx].sessions || []).filter((_, i) => i !== mostRecent.sessionIndex);
+      routine[idx].timeSpent = Math.max(0, (routine[idx].timeSpent || 0) - elapsedMinutes);
+      saveRoutine(routine);
+    }
+  } else if (sourceFile === 'completed') {
+    const completed = loadCompleted();
+    const idx = completed.findIndex(t => t.id === sourceTaskId);
+    if (idx !== -1) {
+      completed[idx].sessions = (completed[idx].sessions || []).filter((_, i) => i !== mostRecent.sessionIndex);
+      completed[idx].timeSpent = Math.max(0, (completed[idx].timeSpent || 0) - elapsedMinutes);
+      saveCompleted(completed);
+    }
+  }
+
+  // 2. Add session to target task
+  if (targetIsNew) {
+    // Parse flags from description
+    const { cleanDesc, activityContext, category, priority, focusLevel, isRoutine } = parseTaskFlags(newTaskDesc, current.contextFilter);
+    newTaskId = generateId();
+    const newTaskObj = {
+      id: newTaskId,
+      title: cleanDesc,
+      activityContext,
+      category,
+      priority,
+      focusLevel: focusLevel ?? null,
+      timeSpent: elapsedMinutes,
+      sessions: [session],
+      notes: [],
+      routine: isRoutine || false
+    };
+
+    if (isRoutine) {
+      const routine = loadRoutine();
+      routine.push(newTaskObj);
+      saveRoutine(routine);
+    } else {
+      const pending = loadPending();
+      pending.unshift(newTaskObj);
+      savePending(pending);
+    }
+
+    // Also push to Postgres (fire-and-forget)
+    writeSessionToDB(newTaskObj, session);
+
+    const emoji = CONTEXT_EMOJI_MAP[activityContext] || '💼';
+    const timeStr = formatTimeSpent(elapsedMinutes);
+    const sourceEmoji = CONTEXT_EMOJI_MAP[sourceTask.activityContext] || '💼';
+    console.log(`\n✅ Reassigned ${timeStr} → new task: ${emoji} ${cleanDesc}`);
+    console.log(`   (from ${sourceEmoji} ${sourceTask.title || 'previous task'}, ${new Date(session.startedAt).toLocaleTimeString()} – ${new Date(session.endedAt).toLocaleTimeString()})`);
+
+    // If user wants to make this the current task (like addS), switch to it now
+    // Don't auto-switch — just create and assign
+  } else {
+    // Add session + time to existing target task
+    updateTaskInFile(targetTask.id, (t) => {
+      t.timeSpent = (t.timeSpent || 0) + elapsedMinutes;
+      if (!t.sessions) t.sessions = [];
+      t.sessions.push(session);
+    });
+
+    writeSessionToDB(targetTask, session);
+
+    const emoji = CONTEXT_EMOJI_MAP[targetTask.activityContext] || '💼';
+    const timeStr = formatTimeSpent(elapsedMinutes);
+    const sourceEmoji = CONTEXT_EMOJI_MAP[sourceTask.activityContext] || '💼';
+    console.log(`\n✅ Reassigned ${timeStr} → ${emoji} ${targetTask.title}`);
+    console.log(`   (from ${sourceEmoji} ${sourceTask.title || 'previous task'}, ${new Date(session.startedAt).toLocaleTimeString()} – ${new Date(session.endedAt).toLocaleTimeString()})`);
+  }
+
+  current.contextSums = calculateContextSums();
+  saveCurrent(current);
+  console.log('');
+}
+
 // ─── Notes ──────────────────────────────────────────────────────────────────
 
 function addNoteToCurrentTask(noteText) {
@@ -2053,7 +2318,9 @@ function syncCalendar(dates = [TODAY], quiet = false) {
           fitness: 'health', exercise: 'health', sleep: 'health', sleeping: 'health',
           meals: 'health', hygiene: 'health',
           transit: 'personal', errands: 'personal', planning: 'personal', journaling: 'personal',
-          leisure: 'unstructured', 'social media': 'unstructured'
+          leisure: 'unstructured', 'social media': 'unstructured',
+          study: 'learning', studying: 'learning', course: 'learning', tutorial: 'learning',
+          research: 'learning', reading: 'learning'
         };
 
         if (matchedTask) {
@@ -2270,7 +2537,7 @@ function mapGoogleListToContext(listName) {
   const listContextMap = {
     'health': 'health', 'personal': 'personal', 'cultivo': 'cultivo',
     'projects': 'projects', 'social': 'social', 'society': 'social',
-    'professional': 'professional', 'edu': 'projects'
+    'professional': 'professional', 'learning': 'learning', 'edu': 'projects'
   };
   return listContextMap[lower] || null;
 }
@@ -2959,10 +3226,13 @@ TASK MANAGEMENT:
   /t r                           Toggle routine/novel view
 
 CONTEXT:
-  /t per|soc|prof|cul|proj|heal|us   Switch context
+  /t per|soc|prof|cul|proj|heal|learn|us   Switch context
   /t all                              Clear filter, pause current task
   /t last HH:MM                       Set end time of last task (e.g., /t last 6:50)
-  /t last-N                           Reassign idle time to task N
+  /t last N                           Reassign last session to task N
+  /t last ? query                     Reassign last session via fuzzy search
+  /t last "string"                    Create new task and assign last session to it
+  /t last-N                           Reassign idle time to task N (legacy)
 
 INTEGRATIONS:
   /t jira                        Pull Jira tickets
@@ -3047,16 +3317,38 @@ try {
   }
 
   // Handle last HH:MM: set end time of last task
+  // Handle last N: reassign last session to task N
+  // Handle last ? query: reassign last session via fuzzy search
+  // Handle last "string": create new task and assign last session to it
   if (command === 'last' && args.length > 0) {
     const timeArg = args[0];
-    // Check if it's HH:MM format (not a task number like -1)
+    // HH:MM format → set end time
     if (timeArg.match(/^\d{1,2}:\d{2}$/)) {
       setLastTaskEndTime(timeArg);
       process.exit(0);
     }
+    // Integer → reassign to task N
+    if (timeArg.match(/^\d+$/) && !args[1]) {
+      reassignLastSession({ type: 'number', value: parseInt(timeArg) });
+      process.exit(0);
+    }
+    // ? query → fuzzy search reassign
+    if (timeArg === '?') {
+      const query = args.slice(1).join(' ').trim();
+      if (!query) {
+        console.error('\n❌ Usage: /t last ? <search query>\n');
+        process.exit(1);
+      }
+      reassignLastSession({ type: 'fuzzy', query });
+      process.exit(0);
+    }
+    // Otherwise treat as a new task description (like addS)
+    const description = args.join(' ').trim();
+    reassignLastSession({ type: 'new', description });
+    process.exit(0);
   }
 
-  // Handle last-N: reassign unstructured time
+  // Handle last-N: reassign unstructured time (legacy, kept for backward compat)
   if (command && command.startsWith('last-')) {
     const taskNumber = parseInt(command.substring(5));
     if (isNaN(taskNumber) || taskNumber < 1) {
@@ -3176,7 +3468,7 @@ try {
 
       if (taskArgs.length > 0) {
         const lastArg = taskArgs[taskArgs.length - 1];
-        const contextMatch = lastArg.match(/^(per|soc|prof|cul|proj|heal|us|personal|social|professional|cultivo|projects|health|unstructured)$/i);
+        const contextMatch = lastArg.match(/^(per|soc|prof|cul|proj|heal|learn|us|personal|social|professional|cultivo|projects|health|learning|unstructured)$/i);
         if (contextMatch) {
           contextArg = contextMatch[1];
           taskArgs = taskArgs.slice(0, -1);
@@ -3240,6 +3532,32 @@ try {
         process.exit(1);
       }
       deleteTask(parseInt(args[0]));
+      break;
+
+    // ─── ID-based commands (used by frontend API) ───────────────────────────
+    case 'switch-to-id':
+      if (!args[0]) { console.error('\n❌ Usage: switch-to-id <task-id>\n'); process.exit(1); }
+      withIdContext(args[0], (n) => switchToTask(n));
+      break;
+
+    case 'complete-task-id':
+      if (!args[0]) { console.error('\n❌ Usage: complete-task-id <task-id>\n'); process.exit(1); }
+      withIdContext(args[0], (n) => completeTaskByNumber(n));
+      break;
+
+    case 'delete-task-id':
+      if (!args[0]) { console.error('\n❌ Usage: delete-task-id <task-id>\n'); process.exit(1); }
+      withIdContext(args[0], (n) => deleteTask(n));
+      break;
+
+    case 'focus-id':
+      if (!args[0] || args.length < 2) { console.error('\n❌ Usage: focus-id <task-id> <0-5>\n'); process.exit(1); }
+      withIdContext(args[0], (n) => setTaskFocus(n, args[1]));
+      break;
+
+    case 'pri-id':
+      if (!args[0] || args.length < 2) { console.error('\n❌ Usage: pri-id <task-id> <1-5>\n'); process.exit(1); }
+      withIdContext(args[0], (n) => setTaskPriority(n, args[1]));
       break;
 
     case 'note':
@@ -3408,6 +3726,8 @@ try {
     case 'cul': case 'cultivo':
     case 'proj': case 'projects':
     case 'heal': case 'health':
+    case 'rest':
+    case 'learn': case 'learning':
     case 'us': case 'unstructured': {
       // Check for ": taskName" pattern → switch to named routine task
       const colonIdx = args.indexOf(':');
@@ -3476,3 +3796,6 @@ try {
   console.error(`\n❌ Error: ${error.message}\n`);
   process.exit(1);
 }
+
+// Drain the pg pool so the process can exit promptly
+if (_pgPool) _pgPool.end().catch(() => {});

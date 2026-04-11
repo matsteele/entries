@@ -1,42 +1,57 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
   IconButton, Toolbar, AppBar, Typography, Divider,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ChecklistIcon from '@mui/icons-material/Checklist';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import RssFeedIcon from '@mui/icons-material/RssFeed';
 import BoltIcon from '@mui/icons-material/Bolt';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import FitnessCenterIcon from '@mui/icons-material/FitnessCenter';
-import TasksView from '../src/components/TasksView';
+import RestaurantIcon from '@mui/icons-material/Restaurant';
+import BedtimeIcon from '@mui/icons-material/Bedtime';
+import MedicationIcon from '@mui/icons-material/Medication';
+import EmailIcon from '@mui/icons-material/Email';
+import FlagIcon from '@mui/icons-material/Flag';
 import TimeView from '../src/components/TimeView';
 import FeedsView from '../src/components/FeedsView';
 import FocusTimeline from '../src/components/FocusTimeline';
 import WorkoutView from '../src/components/WorkoutView';
 import BudgetPanel from '../src/components/BudgetPanel';
+import MealsView from '../src/components/MealsView';
+import SleepView from '../src/components/SleepView';
+import SupplementsView from '../src/components/SupplementsView';
+import EmailView from '../src/components/EmailView';
+import PlanningView from '../src/components/PlanningView';
 
 const DRAWER_WIDTH = 240;
 const DRAWER_COLLAPSED = 56;
 
 const VIEWS = [
-  { key: 'tasks', label: 'Tasks', icon: <ChecklistIcon /> },
+  { key: 'focus', label: 'Focus', icon: <BoltIcon /> },
+  { key: 'planning', label: 'Planning', icon: <FlagIcon /> },
+  { key: 'email', label: 'Email', icon: <EmailIcon /> },
   { key: 'feeds', label: 'Feeds', icon: <RssFeedIcon /> },
   { key: 'time', label: 'Time', icon: <BarChartIcon /> },
-  { key: 'focus', label: 'Focus', icon: <BoltIcon /> },
+  { key: 'meals', label: 'Meals', icon: <RestaurantIcon /> },
+  { key: 'sleep', label: 'Sleep', icon: <BedtimeIcon /> },
+  { key: 'supplements', label: 'Supplements', icon: <MedicationIcon /> },
   { key: 'workout', label: 'Workout', icon: <FitnessCenterIcon /> },
-  { key: 'budget', label: 'Budget', icon: <AccountBalanceWalletIcon /> },
 ];
 
 export default function Home() {
   const [open, setOpen] = useState(true);
-  const [view, setView] = useState('tasks');
+  const [view, setView] = useState('focus');
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const drawerWidth = open ? DRAWER_WIDTH : DRAWER_COLLAPSED;
+
+  if (!mounted) return null;
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -84,13 +99,19 @@ export default function Home() {
         </List>
       </Drawer>
 
-      <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 6 }}>
-        {view === 'tasks' && <TasksView />}
-        {view === 'feeds' && <FeedsView />}
-        {view === 'time' && <TimeView />}
-        {view === 'focus' && <FocusTimeline />}
+      <Box component="main" sx={{
+        flexGrow: 1, p: 3, mt: 6,
+        minWidth: 0,
+      }}>
+        {view === 'focus'   && <FocusTimeline />}
+        {view === 'planning' && <PlanningView />}
+        {view === 'sleep'   && <SleepView />}
+        {view === 'email'   && <EmailView />}
+        {view === 'feeds'   && <FeedsView />}
+        {view === 'time'    && <TimeView />}
+        {view === 'meals'   && <MealsView />}
+        {view === 'supplements' && <SupplementsView />}
         {view === 'workout' && <WorkoutView />}
-        {view === 'budget' && <BudgetPanel />}
       </Box>
     </Box>
   );

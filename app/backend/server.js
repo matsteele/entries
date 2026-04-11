@@ -1,504 +1,252 @@
 /**
- * Simple Express API for Time Tracking System
- * Provides REST API for reading/writing planning and tracking data.
+ * Express API for Entries Dashboard
+ * Reads from split-file task store and provides REST endpoints for the frontend.
  */
 
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const WorkSession = require('./work_session');
+const store = require('./task-store');
+
+// ─── State tracking helpers ──────────────────────────────────────────────────
+
+const STATES_DIR = path.join(__dirname, '../../tracking/states');
+
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function loadStateFile(dateStr) {
+  const p = path.join(STATES_DIR, `${dateStr}.json`);
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+function computeStateDefaults(excludeDate, days = 14) {
+  const sums = { focused: {}, stressed: {}, energy: {} };
+  const counts = { focused: {}, stressed: {}, energy: {} };
+  const today = new Date();
+  for (let i = 1; i <= days; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const ds = localDateStr(d);
+    if (ds === excludeDate) continue;
+    const data = loadStateFile(ds);
+    if (!data) continue;
+    for (const metric of ['focused', 'stressed', 'energy']) {
+      for (const [h, v] of Object.entries(data[metric] || {})) {
+        sums[metric][h] = (sums[metric][h] || 0) + v;
+        counts[metric][h] = (counts[metric][h] || 0) + 1;
+      }
+    }
+  }
+  const defaults = { focused: {}, stressed: {}, energy: {} };
+  for (const metric of ['focused', 'stressed', 'energy']) {
+    for (const h of Object.keys(sums[metric])) {
+      defaults[metric][h] = Math.round(sums[metric][h] / counts[metric][h]);
+    }
+  }
+  return defaults;
+}
 
 const app = express();
-const PORT = 5001;
+const PORT = 5002;
 
-// Middleware
-app.use(cors());  // Allow frontend to connect
+app.use(cors());
 app.use(express.json());
 
-const BASE_DIR = path.join(__dirname, '..', '..');
+// ─── Task endpoints ─────────────────────────────────────────────────────────
 
-// Initialize work session manager
-const sessionManager = new WorkSession(BASE_DIR);
-
-// ============================================================================
-// READ ENDPOINTS
-// ============================================================================
-
-app.get('/api/planning', (req, res) => {
+/** Current task + context sums + view state */
+app.get('/api/tasks/current', (req, res) => {
   try {
-    res.json(sessionManager.planning);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/tracking', (req, res) => {
-  try {
-    res.json(sessionManager.tracking);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/session', (req, res) => {
-  try {
-    const sessionData = sessionManager.currentSession;
-
-    if (sessionData) {
-      // Calculate elapsed time for current activity
-      if (sessionData.current_activity) {
-        const startTime = new Date(sessionData.current_activity.start_time);
-        const now = new Date();
-        const elapsedMs = now - startTime;
-        const elapsedMinutes = elapsedMs / 60000;
-        sessionData.current_activity.elapsed_minutes = Math.round(elapsedMinutes * 100) / 100;
-      }
-
-      res.json(sessionData);
-    } else {
-      res.json(null);
+    const current = store.loadCurrent();
+    if (current.task && current.task.startedAt) {
+      current.task.elapsedMinutes = store.calculateElapsedMinutes(current.task);
     }
+    res.json(current);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/stats', (req, res) => {
+/** Pending (novel) tasks */
+app.get('/api/tasks/pending', (req, res) => {
   try {
-    const stats = sessionManager.tracking.aggregated_stats || {};
-    res.json(stats);
+    res.json(store.loadPending());
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// ============================================================================
-// WRITE ENDPOINTS
-// ============================================================================
-
-app.post('/api/session/start', (req, res) => {
+/** Routine tasks */
+app.get('/api/tasks/routine', (req, res) => {
   try {
-    sessionManager.startSession();
+    res.json(store.loadRoutine());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** Completed tasks */
+app.get('/api/tasks/completed', (req, res) => {
+  try {
+    res.json(store.loadCompleted());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** All tasks combined for dashboard view */
+app.get('/api/tasks/all', (req, res) => {
+  try {
+    const current = store.loadCurrent();
+    const pending = store.loadPending();
+    const routine = store.loadRoutine();
+    const completed = store.loadCompleted();
+
+    if (current.task && current.task.startedAt) {
+      current.task.elapsedMinutes = store.calculateElapsedMinutes(current.task);
+    }
+
+    res.json({ current, pending, routine, completed });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Time endpoints ─────────────────────────────────────────────────────────
+
+/** Live context sums for today/week/month */
+app.get('/api/time/sums', (req, res) => {
+  try {
+    const sums = store.calculateContextSums();
+    const budget = store.getTimeBudgetBalance();
+    res.json({ sums, budget });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** Today's sessions for timeline view */
+app.get('/api/time/sessions/today', (req, res) => {
+  try {
+    const sessions = store.getTodaySessions();
+    res.json(sessions);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Metadata endpoints ─────────────────────────────────────────────────────
+
+/** Context definitions */
+app.get('/api/contexts', (req, res) => {
+  res.json({
+    contexts: store.ALL_CONTEXTS,
+    order: store.CONTEXT_ORDER,
+    emojis: store.CONTEXT_EMOJI_MAP,
+  });
+});
+
+/** Completed today count */
+app.get('/api/stats/today', (req, res) => {
+  try {
+    const current = store.loadCurrent();
+    const completedCount = store.getCompletedTodayCount();
+    const pendingCount = store.loadPending().length;
+    const sums = store.calculateContextSums();
+    const budget = store.getTimeBudgetBalance();
+
     res.json({
-      success: true,
-      session_id: sessionManager.currentSession.session_id
+      completedCount,
+      pendingCount,
+      contextSums: sums,
+      budget,
+      hasActiveTask: !!(current.task && current.task.startedAt),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/session/end', (req, res) => {
+// ─── Protocol endpoints ──────────────────────────────────────────────────────
+
+let pgPool = null;
+try {
+  const { Pool } = require('pg');
+  pgPool = new Pool({ connectionString: 'postgresql://matthewsteele@localhost:5432/entries' });
+} catch (e) {
+  console.warn('pg not available:', e.message);
+}
+
+app.get('/api/protocols/search', async (req, res) => {
+  const { q } = req.query;
+  if (!q) return res.json([]);
+  if (!pgPool) return res.status(503).json({ error: 'Database not available' });
   try {
-    sessionManager.endSession();
-    res.json({ success: true });
+    const result = await pgPool.query(
+      `SELECT id, date, content
+       FROM journals
+       WHERE type = 'protocol'
+         AND content ILIKE $1
+       ORDER BY date DESC
+       LIMIT 3`,
+      [`%${q}%`]
+    );
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/activity/switch', (req, res) => {
-  /**
-   * Switch to a task or planning activity.
-   *
-   * Body: {
-   *   "type": "task_work" | "planning",
-   *   "context_id": "...",
-   *   "objective_id": "...",
-   *   "project_id": "...",
-   *   "task_id": "...",
-   *   "scope": "daily" (for planning),
-   *   "notes": "..."
-   * }
-   */
+app.get('/api/protocols', async (req, res) => {
   try {
-    const data = req.body;
-    const activityType = data.type || 'planning';
-
-    if (activityType === 'task_work') {
-      const success = sessionManager.switchToTask(
-        data.context_id,
-        data.objective_id,
-        data.project_id,
-        data.task_id
-      );
-      res.json({ success });
-    } else {
-      // Switch to planning
-      sessionManager.startActivity('planning', {
-        scope: data.scope || 'daily',
-        notes: data.notes || 'Planning session'
-      });
-      res.json({ success: true });
-    }
+    const result = await pgPool.query(
+      `SELECT id, date, LEFT(content, 120) as preview,
+              REGEXP_REPLACE(content, E'\\n.*', '') as title
+       FROM journals
+       WHERE type = 'protocol'
+       ORDER BY date DESC`
+    );
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/context', (req, res) => {
-  /**
-   * Add a new context.
-   *
-   * Body: {
-   *   "id": "context_id",
-   *   "name": "Context Name"
-   * }
-   */
+// ─── State tracking endpoints ────────────────────────────────────────────────
+
+app.get('/api/states/:date', (req, res) => {
   try {
-    const { id, name } = req.body;
-
-    sessionManager.planning.contexts[id] = {
-      name: name,
-      objectives: {}
-    };
-    sessionManager._savePlanning();
-
-    res.json({ success: true, id });
+    const { date } = req.params;
+    const data = loadStateFile(date);
+    const defaults = computeStateDefaults(date);
+    res.json({ date, data, defaults });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/objective', (req, res) => {
-  /**
-   * Add a new objective.
-   *
-   * Body: {
-   *   "context_id": "...",
-   *   "title": "...",
-   *   "scope": "yearly|weekly|quarterly"
-   * }
-   */
+app.post('/api/states/:date', (req, res) => {
   try {
-    const { context_id, title, scope = 'yearly' } = req.body;
-
-    if (!sessionManager.planning.contexts[context_id]) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    const objId = `obj-${Date.now()}`;
-    const objective = {
-      id: objId,
-      title: title,
-      scope: scope,
-      status: 'active',
-      created: new Date().toISOString().split('T')[0],
-      projects: {}
-    };
-
-    sessionManager.planning.contexts[context_id].objectives[objId] = objective;
-    sessionManager._savePlanning();
-
-    res.json({ success: true, id: objId });
+    const { date } = req.params;
+    if (!fs.existsSync(STATES_DIR)) fs.mkdirSync(STATES_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STATES_DIR, `${date}.json`), JSON.stringify(req.body, null, 2));
+    res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/project', (req, res) => {
-  /**
-   * Add a new project.
-   *
-   * Body: {
-   *   "context_id": "...",
-   *   "objective_id": "...",
-   *   "title": "..."
-   * }
-   */
-  try {
-    const { context_id, objective_id, title } = req.body;
-
-    const context = sessionManager.planning.contexts[context_id];
-    if (!context) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    const objective = context.objectives[objective_id];
-    if (!objective) {
-      return res.status(404).json({ error: 'Objective not found' });
-    }
-
-    const projId = `proj-${Date.now()}`;
-    const dialogueFile = `time-tracking/dialogues/${projId}-${title.toLowerCase().replace(/\s+/g, '-')}.md`;
-
-    const project = {
-      id: projId,
-      title: title,
-      status: 'active',
-      created: new Date().toISOString().split('T')[0],
-      dialogue_file: dialogueFile,
-      tasks: []
-    };
-
-    objective.projects[projId] = project;
-    sessionManager._savePlanning();
-
-    // Create dialogue file
-    const dialoguePath = path.join(BASE_DIR, dialogueFile);
-    const dialogueDir = path.dirname(dialoguePath);
-
-    if (!fs.existsSync(dialogueDir)) {
-      fs.mkdirSync(dialogueDir, { recursive: true });
-    }
-
-    const dialogueContent = `# ${title}
-
-**Project ID:** ${projId}
-**Objective:** ${objective.title}
-**Context:** ${context.name}
-**Created:** ${new Date().toISOString().split('T')[0]}
-
----
-
-## Planning
-
-## Progress Log
-
-`;
-
-    fs.writeFileSync(dialoguePath, dialogueContent, 'utf8');
-
-    res.json({ success: true, id: projId, dialogue_file: dialogueFile });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/task', (req, res) => {
-  /**
-   * Add a new task.
-   *
-   * Body: {
-   *   "context_id": "...",
-   *   "objective_id": "...",
-   *   "project_id": "...",
-   *   "title": "...",
-   *   "plan_id": "..." (optional)
-   * }
-   */
-  try {
-    const { context_id, objective_id, project_id, title, plan_id } = req.body;
-
-    const context = sessionManager.planning.contexts[context_id];
-    if (!context) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    const objective = context.objectives[objective_id];
-    if (!objective) {
-      return res.status(404).json({ error: 'Objective not found' });
-    }
-
-    const project = objective.projects[project_id];
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
-
-    const taskId = `task-${Date.now()}`;
-    const task = {
-      id: taskId,
-      title: title,
-      status: 'pending',
-      created: new Date().toISOString().split('T')[0],
-      plan_id: plan_id || null
-    };
-
-    if (!project.tasks) {
-      project.tasks = [];
-    }
-
-    project.tasks.push(task);
-    sessionManager._savePlanning();
-
-    res.json({ success: true, id: taskId });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/api/task/:task_id/status', (req, res) => {
-  /**
-   * Update task status.
-   *
-   * Body: {
-   *   "status": "pending|in_progress|completed"
-   * }
-   */
-  try {
-    const { task_id } = req.params;
-    const { status: newStatus } = req.body;
-
-    // Find the task
-    for (const ctx of Object.values(sessionManager.planning.contexts)) {
-      if (ctx.objectives) {
-        for (const obj of Object.values(ctx.objectives)) {
-          if (obj.projects) {
-            for (const proj of Object.values(obj.projects)) {
-              if (proj.tasks) {
-                for (const task of proj.tasks) {
-                  if (task.id === task_id) {
-                    task.status = newStatus;
-                    if (newStatus === 'completed') {
-                      task.completed = new Date().toISOString().split('T')[0];
-                    }
-                    sessionManager._savePlanning();
-                    return res.json({ success: true });
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    res.status(404).json({ error: 'Task not found' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================================================
-// DELETE ENDPOINTS
-// ============================================================================
-
-app.delete('/api/task/:context_id/:objective_id/:project_id/:task_id', (req, res) => {
-  /**
-   * Delete a task.
-   */
-  try {
-    const { context_id, objective_id, project_id, task_id } = req.params;
-
-    const context = sessionManager.planning.contexts[context_id];
-    if (!context) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    const objective = context.objectives?.[objective_id];
-    if (!objective) {
-      return res.status(404).json({ error: 'Objective not found' });
-    }
-
-    const project = objective.projects?.[project_id];
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
-
-    if (!project.tasks) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    const taskIndex = project.tasks.findIndex(t => t.id === task_id);
-    if (taskIndex === -1) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    project.tasks.splice(taskIndex, 1);
-    sessionManager._savePlanning();
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/project/:context_id/:objective_id/:project_id', (req, res) => {
-  /**
-   * Delete a project and all its tasks.
-   */
-  try {
-    const { context_id, objective_id, project_id } = req.params;
-
-    const context = sessionManager.planning.contexts[context_id];
-    if (!context) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    const objective = context.objectives?.[objective_id];
-    if (!objective) {
-      return res.status(404).json({ error: 'Objective not found' });
-    }
-
-    if (!objective.projects?.[project_id]) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
-
-    delete objective.projects[project_id];
-    sessionManager._savePlanning();
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/objective/:context_id/:objective_id', (req, res) => {
-  /**
-   * Delete an objective and all its projects.
-   */
-  try {
-    const { context_id, objective_id } = req.params;
-
-    const context = sessionManager.planning.contexts[context_id];
-    if (!context) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    if (!context.objectives?.[objective_id]) {
-      return res.status(404).json({ error: 'Objective not found' });
-    }
-
-    delete context.objectives[objective_id];
-    sessionManager._savePlanning();
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/api/context/:context_id', (req, res) => {
-  /**
-   * Delete a context and all its objectives.
-   */
-  try {
-    const { context_id } = req.params;
-
-    if (!sessionManager.planning.contexts[context_id]) {
-      return res.status(404).json({ error: 'Context not found' });
-    }
-
-    delete sessionManager.planning.contexts[context_id];
-    sessionManager._savePlanning();
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================================================
-// HEALTH CHECK
-// ============================================================================
+// ─── Health ─────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString()
-  });
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ============================================================================
-// START SERVER
-// ============================================================================
+// ─── Start ──────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('\n' + '='.repeat(80));
-  console.log('🚀 TIME TRACKING API SERVER');
-  console.log('='.repeat(80));
-  console.log(`Running on: http://localhost:${PORT}`);
-  console.log(`API Documentation: http://localhost:${PORT}/api/health`);
-  console.log('='.repeat(80) + '\n');
+  console.log(`Dashboard API running on http://localhost:${PORT}`);
 });

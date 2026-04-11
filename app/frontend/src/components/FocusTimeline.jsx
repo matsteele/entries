@@ -2,18 +2,22 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Box, Typography, Paper, LinearProgress, Stack, Tooltip, Drawer,
+  Box, Typography, Paper, LinearProgress, Stack, Tooltip, Drawer, Popover, List,
   IconButton, CircularProgress, Chip, Button, TextField,
-  ListItemButton, ListItemText,
+  ListItemButton, ListItemText, Tabs, Tab,
 } from '@mui/material';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import TodayIcon from '@mui/icons-material/Today';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import {
-  useFocusDay, useCalendarEvents, useMealPlan, useMeals, useSetMealSlot, useUpdateSession,
+  useFocusDay, useCalendarEvents, useMealPlan, useMeals, useSetMealSlot, useUpdateSession, useGroceryList, useSleepData,
+  useAllTasks, useTimeSums, useTaskAction, useReassignSession, useSaveSleepQuality,
 } from '../hooks/useApi';
-import { CONTEXT_CONFIG } from '../lib/contexts';
-import StateTracker from './StateTracker';
+import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
+import { ActiveTask, AddTaskForm, ContextGroup, CompletedStrip } from './TasksView';
+import WeeklyGoalsProgress from './WeeklyGoalsProgress';
+
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const FOCUS_COLOR = { 0: '#37474f', 1: '#1565c0', 2: '#00897b', 3: '#f9a825', 4: '#e65100', 5: '#c62828' };
@@ -48,8 +52,8 @@ const FASTING_SCHEDULE = [
   { startH: EATING_END_H,  endH: 24,           label: 'Fasted',        color: 'rgba(121,85,72,0.30)',  textColor: 'rgba(210,160,130,0.65)' },
 ];
 
-const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack-1', 'snack-2'];
-const MEAL_SLOT_DEFAULT_H = { breakfast: 12.5, lunch: 14, dinner: 17, 'snack-1': 13, 'snack-2': 16 };
+const MEAL_SLOTS = ['meal-1', 'meal-2', 'meal-3', 'meal-4', 'meal-5'];
+const MEAL_STATUS_COLOR = { planned: 'rgba(100,160,255,0.7)', eating: 'rgba(76,175,80,1)', eaten: 'rgba(230,145,56,0.9)' };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function todayStr() {
@@ -62,17 +66,15 @@ function addDays(dateStr, n) {
   return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-');
 }
 function getDisplayStartMs(dayStartMs) {
-  const d = new Date(dayStartMs);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0).getTime();
+  return dayStartMs;
 }
 function getDisplayEndMs(dayStartMs, nowMs) {
-  const d = new Date(dayStartMs);
-  const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
-  return Math.max(nowMs, midnight);
+  return dayStartMs + 86400000;
 }
+// Use browser timezone for time display
+const DISPLAY_TZ = typeof window !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'America/Chicago';
 function formatTime(ms) {
-  const d = new Date(ms), h = d.getHours(), m = d.getMinutes().toString().padStart(2,'0');
-  return `${h % 12 || 12}:${m}${h >= 12 ? 'pm' : 'am'}`;
+  return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: DISPLAY_TZ });
 }
 function formatDuration(ms) {
   const mins = Math.round(ms / 60000);
@@ -81,6 +83,86 @@ function formatDuration(ms) {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 function clamp(val, min, max) { return Math.min(max, Math.max(min, val)); }
+
+// ─── Session Reassign Popover ─────────────────────────────────────────────────
+function SessionReassignPopover({ anchorEl, onClose, segment, pending, routine }) {
+  const [tab, setTab] = useState(0);
+  const reassign = useReassignSession();
+
+  if (!segment) return null;
+
+  const tasks = tab === 0 ? (pending || []) : (routine || []).filter(t => t.title !== 'general');
+  const filtered = tasks.filter(t => t.id !== segment.taskId);
+
+  // Group by context
+  const grouped = {};
+  for (const t of filtered) {
+    const ctx = t.activityContext || 'unstructured';
+    if (!grouped[ctx]) grouped[ctx] = [];
+    grouped[ctx].push(t);
+  }
+
+  const ctxCfg = segment.activityContext ? CONTEXT_CONFIG[segment.activityContext] : {};
+
+  const handleSelect = (toTask) => {
+    reassign.mutate({
+      fromTaskId: segment.taskId,
+      toTaskId: toTask.id,
+      sessionStartedAt: new Date(segment.startMs).toISOString(),
+    }, { onSuccess: () => onClose() });
+  };
+
+  return (
+    <Popover
+      open={Boolean(anchorEl)}
+      anchorEl={anchorEl}
+      onClose={onClose}
+      anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Box sx={{ width: 320, maxHeight: 440 }}>
+        <Box sx={{ px: 1.5, pt: 1.5, pb: 1 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+            {ctxCfg?.emoji} {segment.taskTitle}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            {formatTime(segment.startMs)} – {formatTime(segment.endMs)} ({formatDuration(segment.endMs - segment.startMs)})
+          </Typography>
+          <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
+            Reassign this session to:
+          </Typography>
+        </Box>
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
+          sx={{ minHeight: 32, '& .MuiTab-root': { minHeight: 32, fontSize: '0.75rem' } }}>
+          <Tab label="Novel" />
+          <Tab label="Routine" />
+        </Tabs>
+        <List dense sx={{ overflow: 'auto', maxHeight: 300, py: 0 }}>
+          {CONTEXT_ORDER.map(ctx => {
+            const ctxTasks = grouped[ctx];
+            if (!ctxTasks?.length) return null;
+            const cfg = CONTEXT_CONFIG[ctx] || {};
+            return ctxTasks.map(t => (
+              <ListItemButton key={t.id} onClick={() => handleSelect(t)} disabled={reassign.isPending}
+                sx={{ py: 0.5 }}>
+                <ListItemText
+                  primary={`${cfg.emoji} ${t.title}`}
+                  primaryTypographyProps={{ variant: 'body2', fontSize: '0.82rem', noWrap: true }}
+                />
+              </ListItemButton>
+            ));
+          })}
+          {filtered.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+              No tasks available
+            </Typography>
+          )}
+        </List>
+      </Box>
+    </Popover>
+  );
+}
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub }) {
@@ -94,7 +176,7 @@ function StatCard({ label, value, sub }) {
 }
 
 // ─── Time Axis ────────────────────────────────────────────────────────────────
-function TimeAxis({ dayStartMs, nowMs }) {
+function TimeAxis({ dayStartMs, nowMs, sleepStartMs }) {
   const displayStartMs = getDisplayStartMs(dayStartMs);
   const displayEndMs   = getDisplayEndMs(dayStartMs, nowMs);
   const totalMs = displayEndMs - displayStartMs;
@@ -104,8 +186,9 @@ function TimeAxis({ dayStartMs, nowMs }) {
     const tickMs = displayStartMs + h * 3600000;
     if (tickMs > displayEndMs) break;
     const lp = ((tickMs - displayStartMs) / totalMs) * 100;
-    const d = new Date(tickMs);
-    ticks.push({ lp, label: `${d.getHours() % 12 || 12}${d.getHours() >= 12 ? 'pm' : 'am'}`, isNow: Math.abs(tickMs - nowMs) < 1800000 });
+    const hourOfDay = h % 24;
+    const label = hourOfDay === 0 ? '12am' : hourOfDay === 12 ? '12pm' : `${hourOfDay % 12}${hourOfDay >= 12 ? 'pm' : 'am'}`;
+    ticks.push({ lp, label, isNow: Math.abs(tickMs - nowMs) < 1800000 });
   }
   return (
     <Box sx={{ display: 'flex', mt: 0.5 }}>
@@ -147,52 +230,223 @@ function ProtocolDrawer({ query, label, onClose }) {
 }
 
 // ─── Meal Drawer ─────────────────────────────────────────────────────────────
-function MealDrawer({ slot, meal, meals, onSelect, onClose }) {
+const MEAL_CATEGORIES = ['breakfast', 'lunch', 'dinner', 'snack'];
+
+function MealDrawer({ slot, slotData, meals, onSelect, onClose }) {
   const [search, setSearch] = useState('');
+  const [tab, setTab] = useState(0);
+
   const grouped = {};
-  for (const m of (meals || [])) { const c = m.category || 'other'; if (!grouped[c]) grouped[c] = []; grouped[c].push(m); }
-  const filtered = search ? (meals || []).filter(m => m.name.toLowerCase().includes(search.toLowerCase())) : null;
+  for (const m of (meals || [])) {
+    const c = m.category || 'other';
+    if (!grouped[c]) grouped[c] = [];
+    grouped[c].push(m);
+  }
+  for (const c of Object.keys(grouped)) {
+    grouped[c].sort((a, b) => (b.protein || 0) - (a.protein || 0));
+  }
+
+  const categories = MEAL_CATEGORIES.filter(c => grouped[c]?.length);
+  const activeCategory = search ? null : categories[tab] || categories[0];
+  const visibleMeals = search
+    ? (meals || []).filter(m => m.name.toLowerCase().includes(search.toLowerCase()))
+    : (grouped[activeCategory] || []);
+
+  const slotNum = slot ? slot.replace('meal-', '') : '';
+  const currentMeal = slotData?.meal_id ? meals?.find(m => m.id === slotData.meal_id) : null;
+  const currentStatus = slotData?.status || null;
+
   return (
     <Drawer anchor="right" open={!!slot} onClose={onClose} PaperProps={{ sx: { width: 420, bgcolor: '#1a1a1a', display: 'flex', flexDirection: 'column' } }}>
+      {/* Header */}
       <Box sx={{ px: 3, py: 2, borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="subtitle1" sx={{ fontFamily: 'monospace', fontWeight: 600, textTransform: 'capitalize' }}>{slot}</Typography>
+        <Typography variant="subtitle1" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+          Meal {slotNum}
+          {currentStatus && <Chip label={currentStatus} size="small" sx={{ ml: 1, bgcolor: MEAL_STATUS_COLOR[currentStatus], color: '#fff', height: 18, fontSize: '0.65rem' }} />}
+        </Typography>
         <IconButton onClick={onClose} size="small" sx={{ color: 'text.secondary' }}>✕</IconButton>
       </Box>
-      {meal && (
+
+      {/* Current meal detail + status actions */}
+      {currentMeal && (
         <Box sx={{ px: 3, py: 2, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <Typography variant="h6" sx={{ mb: 0.5 }}>{meal.name}</Typography>
-          <Stack direction="row" spacing={1} sx={{ mb: 1, flexWrap: 'wrap', gap: 0.5 }}>
-            <Chip label={`${meal.protein}g P`} size="small" sx={{ bgcolor: '#1565c0' }} />
-            <Chip label={`${meal.carbs}g C`} size="small" sx={{ bgcolor: '#5d4037' }} />
-            <Chip label={`${meal.fat}g F`} size="small" sx={{ bgcolor: '#4a148c' }} />
-            <Chip label={`${meal.calories} kcal`} size="small" variant="outlined" />
+          <Typography variant="h6" sx={{ mb: 0.5 }}>{currentMeal.name}</Typography>
+          <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: 'wrap', gap: 0.5 }}>
+            <Chip label={`${currentMeal.protein}g P`} size="small" sx={{ bgcolor: '#1565c0' }} />
+            <Chip label={`${currentMeal.carbs}g C`} size="small" sx={{ bgcolor: '#5d4037' }} />
+            <Chip label={`${currentMeal.fat}g F`} size="small" sx={{ bgcolor: '#4a148c' }} />
+            <Chip label={`${currentMeal.calories} kcal`} size="small" variant="outlined" />
           </Stack>
-          {meal.ingredients?.length > 0 && <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>{meal.ingredients.join(' · ')}</Typography>}
-          {meal.recipe && <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: '0.78rem', color: 'text.secondary', mt: 1 }}>{meal.recipe}</Typography>}
-          <Button size="small" variant="outlined" sx={{ mt: 1.5 }} onClick={() => onSelect(null)}>Clear slot</Button>
+          {currentMeal.ingredients?.length > 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{currentMeal.ingredients.join(' · ')}</Typography>
+          )}
+          {/* Status buttons */}
+          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <Button size="small" variant={currentStatus === 'planned' ? 'contained' : 'outlined'}
+              sx={{ fontSize: '0.7rem' }}
+              onClick={() => onSelect(currentMeal.id, 'planned')}>Plan</Button>
+            <Button size="small" variant={currentStatus === 'eating' ? 'contained' : 'outlined'} color="success"
+              sx={{ fontSize: '0.7rem' }}
+              onClick={() => onSelect(currentMeal.id, 'eating')}>Eating now</Button>
+            <Button size="small" variant={currentStatus === 'eaten' ? 'contained' : 'outlined'} color="warning"
+              sx={{ fontSize: '0.7rem' }}
+              onClick={() => onSelect(currentMeal.id, 'eaten')}>Eaten ✓</Button>
+            <Button size="small" color="error" sx={{ fontSize: '0.7rem', ml: 'auto' }}
+              onClick={() => onSelect(null, null)}>Clear</Button>
+          </Stack>
         </Box>
       )}
+
+      {/* Search */}
       <Box sx={{ px: 3, pt: 2, pb: 1 }}>
-        <TextField size="small" fullWidth placeholder="Search meals..." value={search} onChange={e => setSearch(e.target.value)} sx={{ mb: 1 }} />
+        <TextField size="small" fullWidth placeholder="Search meals..." value={search} onChange={e => setSearch(e.target.value)} />
       </Box>
+
+      {/* Category tabs (hidden when searching) */}
+      {!search && categories.length > 1 && (
+        <Tabs
+          value={Math.min(tab, categories.length - 1)}
+          onChange={(_, v) => setTab(v)}
+          variant="fullWidth"
+          sx={{ borderBottom: '1px solid rgba(255,255,255,0.08)', minHeight: 36,
+            '& .MuiTab-root': { minHeight: 36, fontSize: '0.7rem', textTransform: 'capitalize', py: 0 } }}
+        >
+          {categories.map(c => <Tab key={c} label={c} />)}
+        </Tabs>
+      )}
+
+      {/* Meal list */}
       <Box sx={{ flex: 1, overflow: 'auto', px: 1 }}>
-        {(filtered || []).length > 0
-          ? filtered.map(m => (<ListItemButton key={m.id} onClick={() => onSelect(m.id)} sx={{ borderRadius: 1 }}><ListItemText primary={m.name} secondary={`${m.calories} kcal · ${m.protein}g P`} /></ListItemButton>))
-          : Object.entries(grouped).map(([cat, catMeals]) => (
-              <Box key={cat}>
-                <Typography variant="caption" color="text.disabled" sx={{ px: 2, textTransform: 'uppercase', fontSize: '0.6rem', display: 'block', pt: 1 }}>{cat}</Typography>
-                {catMeals.map(m => (<ListItemButton key={m.id} onClick={() => onSelect(m.id)} sx={{ borderRadius: 1 }}><ListItemText primary={m.name} secondary={`${m.calories} kcal · ${m.protein}g P · ${m.carbs}g C`} /></ListItemButton>))}
-              </Box>
-            ))}
+        {visibleMeals.map(m => (
+          <ListItemButton key={m.id} onClick={() => onSelect(m.id, currentStatus || 'planned')} sx={{ borderRadius: 1 }}>
+            <ListItemText
+              primary={m.name}
+              secondary={`${m.calories} kcal · ${m.protein}g P · ${m.carbs}g C`}
+            />
+          </ListItemButton>
+        ))}
+        {visibleMeals.length === 0 && (
+          <Typography variant="body2" color="text.disabled" sx={{ px: 2, py: 3, textAlign: 'center' }}>No meals found</Typography>
+        )}
       </Box>
     </Drawer>
+  );
+}
+
+// ─── Meals Panel ─────────────────────────────────────────────────────────────
+function MealsPanel({ slots, meals, onSlotClick, date }) {
+  const [showGrocery, setShowGrocery] = useState(false);
+  const { data: groceryData } = useGroceryList(showGrocery ? date : null);
+  if (!slots) return null;
+  const mealMap = {};
+  for (const m of (meals || [])) mealMap[m.id] = m;
+
+  return (
+    <Paper sx={{ p: 2, mb: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1.5, color: 'text.secondary', fontWeight: 600, letterSpacing: 1, fontSize: '0.7rem', textTransform: 'uppercase' }}>
+        Meals Today
+      </Typography>
+      <Stack spacing={1}>
+        {MEAL_SLOTS.map((slot, idx) => {
+          const slotData = slots.find(s => s.slot === slot);
+          const meal = slotData?.meal_id ? mealMap[slotData.meal_id] : null;
+          const status = slotData?.status;
+          const isEmpty = !meal;
+
+          return (
+            <Box
+              key={slot}
+              onClick={() => onSlotClick(slot)}
+              sx={{
+                display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1,
+                borderRadius: 1, cursor: 'pointer', border: '1px solid',
+                borderColor: status === 'eating' ? 'rgba(76,175,80,0.5)' : status === 'eaten' ? 'rgba(230,145,56,0.3)' : 'rgba(255,255,255,0.06)',
+                bgcolor: status === 'eating' ? 'rgba(76,175,80,0.08)' : 'transparent',
+                '&:hover': { bgcolor: 'rgba(255,255,255,0.04)' },
+                transition: 'all 0.1s',
+                boxShadow: status === 'eating' ? '0 0 8px rgba(76,175,80,0.2)' : 'none',
+              }}
+            >
+              {/* Slot number circle */}
+              <Box sx={{
+                width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                bgcolor: status === 'eating' ? 'rgba(76,175,80,0.9)' : status === 'eaten' ? 'rgba(230,145,56,0.85)' : isEmpty ? 'rgba(255,255,255,0.08)' : 'rgba(100,160,255,0.6)',
+                border: `1.5px solid ${status === 'eating' ? 'rgba(76,175,80,1)' : status === 'eaten' ? 'rgba(230,145,56,1)' : 'rgba(255,255,255,0.2)'}`,
+              }}>
+                <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, lineHeight: 1 }}>
+                  {status === 'eaten' ? '✓' : status === 'eating' ? '⏺' : idx + 1}
+                </Typography>
+              </Box>
+
+              {/* Meal info */}
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                {meal ? (
+                  <>
+                    <Typography variant="body2" sx={{ fontWeight: 500, lineHeight: 1.2, mb: 0.25 }}>{meal.name}</Typography>
+                    <Stack direction="row" spacing={0.5}>
+                      <Typography variant="caption" sx={{ color: '#90caf9', fontSize: '0.65rem' }}>{meal.protein}g P</Typography>
+                      <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.65rem' }}>·</Typography>
+                      <Typography variant="caption" sx={{ color: '#a5d6a7', fontSize: '0.65rem' }}>{meal.calories} kcal</Typography>
+                    </Stack>
+                  </>
+                ) : (
+                  <Typography variant="body2" color="text.disabled" sx={{ fontSize: '0.78rem' }}>+ Add meal {idx + 1}</Typography>
+                )}
+              </Box>
+
+              {/* Status badge */}
+              {status && (
+                <Chip label={status} size="small" sx={{ height: 18, fontSize: '0.6rem', bgcolor: MEAL_STATUS_COLOR[status], color: '#fff', flexShrink: 0 }} />
+              )}
+            </Box>
+          );
+        })}
+      </Stack>
+
+      {/* Grocery list toggle */}
+      <Box sx={{ mt: 1.5, borderTop: '1px solid rgba(255,255,255,0.06)', pt: 1.5 }}>
+        <Button size="small" variant="text" sx={{ fontSize: '0.7rem', color: 'text.secondary', p: 0 }}
+          onClick={() => setShowGrocery(v => !v)}>
+          {showGrocery ? '▲ Hide grocery list' : '🛒 Grocery list'}
+        </Button>
+        {showGrocery && groceryData && (
+          <Box sx={{ mt: 1 }}>
+            {groceryData.meals?.length === 0 ? (
+              <Typography variant="caption" color="text.disabled">No meals planned yet.</Typography>
+            ) : (
+              <>
+                <Stack spacing={0.25} sx={{ mb: 1 }}>
+                  {groceryData.meals?.map((m, i) => (
+                    <Typography key={i} variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                      {m.status === 'eaten' ? '✓' : m.status === 'eating' ? '⏺' : '·'} {m.name}
+                    </Typography>
+                  ))}
+                </Stack>
+                {groceryData.ingredients?.length > 0 && (
+                  <>
+                    <Typography variant="caption" sx={{ fontSize: '0.65rem', color: 'text.disabled', display: 'block', mb: 0.5 }}>INGREDIENTS</Typography>
+                    <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                      {groceryData.ingredients.map(({ name, count }) => (
+                        <Chip key={name} label={count > 1 ? `${name} ×${count}` : name} size="small"
+                          variant="outlined" sx={{ height: 18, fontSize: '0.62rem' }} />
+                      ))}
+                    </Stack>
+                  </>
+                )}
+              </>
+            )}
+          </Box>
+        )}
+      </Box>
+    </Paper>
   );
 }
 
 // ─── Macro Bar ────────────────────────────────────────────────────────────────
 function MacroBar({ macroTotals }) {
   if (!macroTotals) return null;
-  const { protein, carbs, fat, calories, mealsPlanned } = macroTotals;
+  const { protein, carbs, fat, calories, mealsPlanned, mealsEaten } = macroTotals;
   const targets = { protein: 180, carbs: 200, fat: 70, calories: 2200 };
   return (
     <Box sx={{ display: 'flex', mt: 0.75 }}>
@@ -210,19 +464,220 @@ function MacroBar({ macroTotals }) {
               </Box>
             </Box>
           ))}
-          <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem', whiteSpace: 'nowrap' }}>{mealsPlanned ?? 0}/{MEAL_SLOTS.length} planned</Typography>
+          <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem', whiteSpace: 'nowrap' }}>{mealsEaten ?? mealsPlanned ?? 0}/{MEAL_SLOTS.length} eaten</Typography>
         </Stack>
       </Box>
     </Box>
   );
 }
 
-// ─── Fasting + Meal Bar ───────────────────────────────────────────────────────
-function FastingBar({ dayStartMs, nowMs, mealPlan, meals, onMealSlotClick }) {
+// ─── Sleep + Rest Bar ────────────────────────────────────────────────────────
+function SleepBar({ dayStartMs, nowMs, sleepData, sleepStartMs, wakeTimeMs, displayDate, onQualityClick }) {
   const displayStartMs = getDisplayStartMs(dayStartMs);
   const displayEndMs   = getDisplayEndMs(dayStartMs, nowMs);
   const totalMs = displayEndMs - displayStartMs;
-  const midnightMs = displayStartMs;
+  const midnightMs = dayStartMs;
+
+  const lastNight = sleepData?.lastNight;
+  const todayRest = sleepData?.todayRest || [];
+  const quality = lastNight?.quality;
+
+  // Build segments
+  const segments = [];
+  if (sleepStartMs && wakeTimeMs) {
+    segments.push({ startMs: Math.max(sleepStartMs, displayStartMs), endMs: wakeTimeMs, type: 'sleep', label: 'Sleep' });
+  } else if (wakeTimeMs) {
+    segments.push({ startMs: displayStartMs, endMs: wakeTimeMs, type: 'sleep', label: 'Sleep' });
+  }
+  for (const r of todayRest) {
+    const rs = new Date(r.restStart).getTime(), re = new Date(r.restEnd).getTime();
+    if (re > displayStartMs && rs < displayEndMs) {
+      segments.push({ startMs: Math.max(rs, displayStartMs), endMs: Math.min(re, displayEndMs), type: 'rest', label: `Rest · ${formatDuration(re - rs)}` });
+    }
+  }
+
+  const fmtSleep = (mins) => {
+    if (!mins) return '—';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  };
+
+  // Convert avgBedtimeMinutes / avgWaketimeMinutes (minutes from midnight) to ms on this day's timeline
+  const avgBedMs = sleepData?.avgBedtimeMinutes != null
+    ? midnightMs + (sleepData.avgBedtimeMinutes >= 1440 ? sleepData.avgBedtimeMinutes - 1440 : sleepData.avgBedtimeMinutes) * 60000
+    : null;
+  const avgWakeMs = sleepData?.avgWaketimeMinutes != null
+    ? midnightMs + sleepData.avgWaketimeMinutes * 60000
+    : null;
+
+  const pctOf = (ms) => ((ms - displayStartMs) / totalMs) * 100;
+
+  const SLEEP_COLORS = {
+    sleep: 'rgba(80,100,180,0.35)',
+    rest: 'rgba(120,100,200,0.30)',
+    awake: 'rgba(255,255,255,0.04)',
+  };
+
+  return (
+    <Box sx={{ mt: 0.75 }}>
+      <Box sx={{ display: 'flex' }}>
+        <Box sx={{ width: Y_AXIS_WIDTH + 4, flexShrink: 0 }} />
+        <Box sx={{ flex: 1, position: 'relative', height: 24, borderRadius: 0.5, overflow: 'visible', bgcolor: SLEEP_COLORS.awake }}>
+          {/* Sleep/rest segments */}
+          {segments.map((seg, i) => {
+            const cs = Math.max(seg.startMs, displayStartMs), ce = Math.min(seg.endMs, displayEndMs);
+            if (ce <= cs) return null;
+            const lp = pctOf(cs), wp = ((ce - cs) / totalMs) * 100;
+            const isSleep = seg.type === 'sleep';
+            return (
+              <Tooltip key={i} title={`${isSleep ? '🌙' : '😴'} ${seg.label}${isSleep && sleepStartMs ? ` (${formatTime(sleepStartMs)} – ${formatTime(wakeTimeMs)})` : ''}`} placement="top" arrow>
+                <Box sx={{
+                  position: 'absolute', top: 0, bottom: 0, left: `${lp}%`, width: `${wp}%`,
+                  bgcolor: SLEEP_COLORS[seg.type],
+                  borderLeft: i > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  borderRadius: 0.5,
+                }}>
+                  {isSleep && wp > 5 && (
+                    <Typography variant="caption" sx={{ color: 'rgba(150,170,255,0.7)', fontSize: '0.58rem', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                      🌙 {lastNight ? fmtSleep(lastNight.durationMinutes) : ''}
+                    </Typography>
+                  )}
+                  {!isSleep && wp > 3 && (
+                    <Typography variant="caption" sx={{ color: 'rgba(180,160,255,0.7)', fontSize: '0.58rem', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>😴</Typography>
+                  )}
+                </Box>
+              </Tooltip>
+            );
+          })}
+
+          {/* Avg bedtime reference line (orange dashed) */}
+          {avgBedMs && avgBedMs > displayStartMs && avgBedMs < displayEndMs && (
+            <Tooltip title={`Avg bedtime: ${formatTime(avgBedMs)}`} placement="top" arrow>
+              <Box sx={{
+                position: 'absolute', top: -2, bottom: -2, left: `${pctOf(avgBedMs)}%`,
+                width: 0, borderLeft: '1.5px dashed rgba(255,167,38,0.6)', zIndex: 4, pointerEvents: 'auto',
+              }} />
+            </Tooltip>
+          )}
+
+          {/* Avg wake reference line (cyan dashed) */}
+          {avgWakeMs && avgWakeMs > displayStartMs && avgWakeMs < displayEndMs && (
+            <Tooltip title={`Avg wake: ${formatTime(avgWakeMs)}`} placement="top" arrow>
+              <Box sx={{
+                position: 'absolute', top: -2, bottom: -2, left: `${pctOf(avgWakeMs)}%`,
+                width: 0, borderLeft: '1.5px dashed rgba(0,230,200,0.55)', zIndex: 4, pointerEvents: 'auto',
+              }} />
+            </Tooltip>
+          )}
+
+          {/* Quality badge */}
+          {lastNight && wakeTimeMs && wakeTimeMs > displayStartMs && (
+            <Tooltip title={quality ? `Sleep quality: ${quality}/5 — click to edit` : 'Rate sleep quality'} placement="top" arrow>
+              <Box
+                onClick={(e) => onQualityClick?.(e, displayDate)}
+                sx={{
+                  position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)',
+                  left: `${Math.min(pctOf(wakeTimeMs) + 1.5, 95)}%`,
+                  width: 20, height: 20, borderRadius: '50%', cursor: 'pointer',
+                  bgcolor: quality ? `rgba(${quality >= 4 ? '76,175,80' : quality >= 3 ? '255,193,7' : '244,67,54'},0.8)` : 'rgba(255,255,255,0.15)',
+                  border: '1.5px solid rgba(255,255,255,0.3)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5,
+                  '&:hover': { transform: 'translate(-50%, -50%) scale(1.15)', filter: 'brightness(1.2)' },
+                  transition: 'all 0.15s',
+                }}>
+                <Typography sx={{ fontSize: '0.55rem', fontWeight: 700, lineHeight: 1 }}>{quality || '?'}</Typography>
+              </Box>
+            </Tooltip>
+          )}
+        </Box>
+      </Box>
+      {/* Summary + legend */}
+      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1.5} sx={{ mt: 0.5, pl: `${Y_AXIS_WIDTH + 4}px` }}>
+        {lastNight && (
+          <Typography variant="caption" sx={{ color: 'rgba(150,180,255,0.7)', fontSize: '0.62rem', fontFamily: 'monospace' }}>
+            🌙 last night: <strong>{fmtSleep(lastNight.durationMinutes)}</strong>
+            {sleepStartMs && ` (${formatTime(sleepStartMs)} – ${formatTime(wakeTimeMs)})`}
+            {quality && <span> · ⭐ {quality}/5</span>}
+          </Typography>
+        )}
+        {sleepData?.avgMinutes && (
+          <Typography variant="caption" sx={{ color: 'rgba(150,180,255,0.45)', fontSize: '0.62rem', fontFamily: 'monospace' }}>
+            7d avg: <strong>{fmtSleep(sleepData.avgMinutes)}</strong>
+            {sleepData.avgQuality && ` · q:${sleepData.avgQuality}`}
+            {sleepData.sleepDebt > 30 && <span style={{ color: 'rgba(244,67,54,0.7)' }}> · debt:{fmtSleep(sleepData.sleepDebt)}</span>}
+          </Typography>
+        )}
+        {sleepData?.todayRestMinutes > 0 && (
+          <Typography variant="caption" sx={{ color: 'rgba(180,160,255,0.5)', fontSize: '0.62rem', fontFamily: 'monospace' }}>
+            😴 rest: {fmtSleep(sleepData.todayRestMinutes)}
+          </Typography>
+        )}
+        {/* Reference line legend */}
+        {(avgBedMs || avgWakeMs) && (
+          <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.52rem', fontFamily: 'monospace' }}>
+            {avgBedMs && <><span style={{ color: 'rgba(255,167,38,0.7)' }}>┆</span> avg bed</>}
+            {avgBedMs && avgWakeMs && ' · '}
+            {avgWakeMs && <><span style={{ color: 'rgba(0,230,200,0.7)' }}>┆</span> avg wake</>}
+          </Typography>
+        )}
+      </Stack>
+    </Box>
+  );
+}
+
+// ─── Sleep Quality Popover ──────────────────────────────────────────────────
+function SleepQualityPopover({ anchorEl, onClose, date, currentQuality, onSave }) {
+  const [quality, setQuality] = useState(currentQuality || 0);
+  useEffect(() => { setQuality(currentQuality || 0); }, [currentQuality]);
+
+  return (
+    <Popover
+      open={!!anchorEl}
+      anchorEl={anchorEl}
+      onClose={onClose}
+      anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+    >
+      <Box sx={{ p: 1.5, minWidth: 160 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>Sleep Quality</Typography>
+        <Stack direction="row" spacing={0.5} sx={{ mb: 1 }}>
+          {[1, 2, 3, 4, 5].map(n => (
+            <Box
+              key={n}
+              onClick={() => setQuality(n)}
+              sx={{
+                width: 28, height: 28, borderRadius: '50%', cursor: 'pointer',
+                bgcolor: n <= quality
+                  ? n >= 4 ? 'rgba(76,175,80,0.8)' : n >= 3 ? 'rgba(255,193,7,0.8)' : 'rgba(244,67,54,0.7)'
+                  : 'rgba(255,255,255,0.1)',
+                border: '1.5px solid rgba(255,255,255,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                '&:hover': { filter: 'brightness(1.3)', transform: 'scale(1.1)' },
+                transition: 'all 0.1s',
+              }}
+            >
+              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700 }}>{n}</Typography>
+            </Box>
+          ))}
+        </Stack>
+        <Button size="small" variant="contained" fullWidth disabled={!quality}
+          onClick={() => { onSave(date, quality); onClose(); }}
+          sx={{ textTransform: 'none', fontSize: '0.7rem' }}
+        >
+          Save
+        </Button>
+      </Box>
+    </Popover>
+  );
+}
+
+// ─── Fasting + Meal Bar ───────────────────────────────────────────────────────
+function FastingBar({ dayStartMs, nowMs, mealPlan, meals, onMealSlotClick, sleepStartMs }) {
+  const displayStartMs = getDisplayStartMs(dayStartMs);
+  const displayEndMs   = getDisplayEndMs(dayStartMs, nowMs);
+  const totalMs = displayEndMs - displayStartMs;
+  const midnightMs = dayStartMs;
   const slotMealMap = {};
   for (const s of (mealPlan?.slots || [])) slotMealMap[s.slot] = s;
   const eatingStartMs = midnightMs + EATING_START_H * 3600000;
@@ -253,40 +708,50 @@ function FastingBar({ dayStartMs, nowMs, mealPlan, meals, onMealSlotClick }) {
             </Box>
           );
         })()}
-        {/* Meal slot buttons */}
-        {MEAL_SLOTS.map(slot => {
-          const slotInfo = slotMealMap[slot];
-          const defaultH = MEAL_SLOT_DEFAULT_H[slot] ?? EATING_START_H;
-          let slotMs = midnightMs + defaultH * 3600000;
-          if (slotInfo?.planned_time) {
-            const [hh, mm] = slotInfo.planned_time.split(':').map(Number);
-            slotMs = midnightMs + (hh + mm / 60) * 3600000;
-          }
-          if (slotMs < eatingStartMs || slotMs >= eatingEndMs) return null;
-          const lp = ((clamp(slotMs, eatingStartMs, eatingEndMs - 1) - displayStartMs) / totalMs) * 100;
-          const hasMeal = !!slotInfo?.meal_id;
-          return (
-            <Tooltip key={slot} title={slotInfo?.name || slot} placement="top" arrow>
-              <Box onClick={() => onMealSlotClick(slot)} sx={{
-                position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)', left: `${lp}%`,
-                width: 22, height: 22, bgcolor: hasMeal ? 'rgba(230,145,56,0.85)' : 'rgba(255,255,255,0.15)',
-                border: '1px solid rgba(255,255,255,0.3)', borderRadius: '50%', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
-                '&:hover': { bgcolor: hasMeal ? 'rgba(230,145,56,1)' : 'rgba(255,255,255,0.3)', transform: 'translate(-50%, -50%) scale(1.15)' },
-                transition: 'all 0.15s',
-              }}>
-                <Typography sx={{ fontSize: '0.6rem', lineHeight: 1 }}>{hasMeal ? '🍽' : '+'}</Typography>
-              </Box>
-            </Tooltip>
-          );
-        })}
+        {/* Meal slot circles — evenly spaced across the eating window */}
+        {(() => {
+          const eatingCs = Math.max(eatingStartMs, displayStartMs);
+          const eatingCe = Math.min(eatingEndMs, displayEndMs);
+          if (eatingCe <= eatingCs) return null;
+          const eatingWidthPct = ((eatingCe - eatingCs) / totalMs) * 100;
+          const eatingLeftPct  = ((eatingCs - displayStartMs) / totalMs) * 100;
+          const step = eatingWidthPct / (MEAL_SLOTS.length + 1);
+
+          return MEAL_SLOTS.map((slot, idx) => {
+            const slotInfo = slotMealMap[slot];
+            const lp = eatingLeftPct + step * (idx + 1);
+            const hasMeal = !!slotInfo?.meal_id;
+            const status = slotInfo?.status || null;
+            const isEating = status === 'eating';
+            const isEaten  = status === 'eaten';
+            const bgColor = isEating ? 'rgba(76,175,80,0.9)' : isEaten ? 'rgba(230,145,56,0.85)' : hasMeal ? 'rgba(100,160,255,0.6)' : 'rgba(255,255,255,0.12)';
+            const label = isEating ? '⏺' : isEaten ? '🍽' : hasMeal ? `${idx + 1}` : '+';
+            const tooltipTitle = slotInfo?.name ? `${idx + 1}. ${slotInfo.name}${status ? ` (${status})` : ''}` : `Meal ${idx + 1}`;
+            return (
+              <Tooltip key={slot} title={tooltipTitle} placement="top" arrow>
+                <Box onClick={() => onMealSlotClick(slot)} sx={{
+                  position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)', left: `${lp}%`,
+                  width: 22, height: 22, bgcolor: bgColor,
+                  border: `1.5px solid ${isEating ? 'rgba(76,175,80,1)' : isEaten ? 'rgba(230,145,56,1)' : 'rgba(255,255,255,0.3)'}`,
+                  borderRadius: '50%', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2,
+                  '&:hover': { transform: 'translate(-50%, -50%) scale(1.15)', filter: 'brightness(1.2)' },
+                  transition: 'all 0.15s',
+                  boxShadow: isEating ? '0 0 6px rgba(76,175,80,0.7)' : 'none',
+                }}>
+                  <Typography sx={{ fontSize: '0.6rem', lineHeight: 1, fontWeight: 600 }}>{label}</Typography>
+                </Box>
+              </Tooltip>
+            );
+          });
+        })()}
       </Box>
     </Box>
   );
 }
 
 // ─── Calendar Overlay ─────────────────────────────────────────────────────────
-function CalendarOverlay({ events, dayStartMs, nowMs }) {
+function CalendarOverlay({ events, dayStartMs, nowMs, sleepStartMs }) {
   const displayStartMs = getDisplayStartMs(dayStartMs);
   const displayEndMs   = getDisplayEndMs(dayStartMs, nowMs);
   const totalMs = displayEndMs - displayStartMs;
@@ -313,14 +778,17 @@ function CalendarOverlay({ events, dayStartMs, nowMs }) {
 }
 
 // ─── Timeline Bar with Drag Editing ──────────────────────────────────────────
-function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSessionUpdate }) {
+function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSessionUpdate, sleepStartMs, wakeTimeMs, pending, routine }) {
   const displayStartMs = getDisplayStartMs(dayStartMs);
   const displayEndMs   = getDisplayEndMs(dayStartMs, nowMs);
   const totalMs = displayEndMs - displayStartMs;
-  const midnightMs = displayStartMs;
+  const midnightMs = dayStartMs;
   const containerRef = useRef(null);
   const dragRef = useRef(null);
+  const wasDraggingRef = useRef(false);
   const [dragOverride, setDragOverride] = useState(null);
+  const [reassignAnchor, setReassignAnchor] = useState(null);
+  const [reassignSegment, setReassignSegment] = useState(null);
 
   const nonGapSegs = timeline.map((s, i) => ({ ...s, _i: i })).filter(s => !s.isGap);
   const getPrevEnd  = i => { const prev = nonGapSegs.filter(s => s._i < i).pop(); return prev ? prev.endMs : displayStartMs; };
@@ -348,7 +816,7 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
     };
     const onUp = () => {
       const drag = dragRef.current; if (!drag) return;
-      const { type, segIdx } = drag; dragRef.current = null;
+      const { type, segIdx } = drag; dragRef.current = null; wasDraggingRef.current = true; setTimeout(() => { wasDraggingRef.current = false; }, 50);
       setDragOverride(cur => {
         if (cur && onSessionUpdate) {
           const seg = timeline[segIdx];
@@ -377,7 +845,20 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
           <Typography key={l} variant="caption" sx={{ position: 'absolute', right: 4, bottom: `${(l/5)*100}%`, transform: 'translateY(50%)', color: FOCUS_COLOR[l], fontSize: '0.62rem', fontFamily: 'monospace', lineHeight: 1 }}>{l}</Typography>
         ))}
       </Box>
-      <Box ref={containerRef} sx={{ flex: 1, position: 'relative', height: CHART_HEIGHT, userSelect: 'none' }}>
+      <Box ref={containerRef} sx={{ flex: 1, position: 'relative', height: CHART_HEIGHT, userSelect: 'none', overflow: 'hidden' }}>
+        {/* Sleep block — midnight → wake time */}
+        {wakeTimeMs && wakeTimeMs > displayStartMs && (() => {
+          const eMs = Math.min(wakeTimeMs, displayEndMs);
+          const wp = ((eMs - displayStartMs) / totalMs) * 100;
+          const sleepLabel = sleepStartMs
+            ? `🌙 ${formatTime(sleepStartMs)} – ${formatTime(wakeTimeMs)} · ${formatDuration(wakeTimeMs - sleepStartMs)}`
+            : `🌙 Wake ${formatTime(wakeTimeMs)}`;
+          return (
+            <Tooltip title={sleepLabel} placement="top" arrow key="sleep-block">
+              <Box sx={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: `${wp}%`, bgcolor: 'rgba(100,130,255,0.13)', borderRight: '2px solid rgba(150,180,255,0.5)', zIndex: 1, pointerEvents: 'auto' }} />
+            </Tooltip>
+          );
+        })()}
         {/* Ideal schedule */}
         {IDEAL_SCHEDULE.map((b, i) => {
           const bs = midnightMs + b.startH * 3600000, be = midnightMs + b.endH * 3600000;
@@ -412,9 +893,16 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
             ? `Untracked: ${formatTime(sMs)} – ${formatTime(eMs)} (${formatDuration(eMs-sMs)})`
             : `${ctxCfg?.emoji||''} ${seg.taskTitle} · F:${fl} ${FOCUS_LABEL[fl]}\n${formatTime(sMs)} – ${formatTime(eMs)} (${formatDuration(eMs-sMs)})`;
           const canEdit = isLive && !seg.isGap && seg.sourceFile !== 'postgres' && !!seg.taskId;
+          const canReassign = !seg.isGap && !!seg.taskId;
           return (
-            <Tooltip key={i} title={<span style={{whiteSpace:'pre-line'}}>{tipLabel}</span>} arrow placement="top" disableHoverListener={!!dragOverride}>
-              <Box sx={{ position: 'absolute', bottom: 0, left: `${lp}%`, width: `${wp}%`, height: `${hp}%`, minHeight: seg.isGap ? 0 : 2, bgcolor: color, opacity: seg.isGap ? 1 : 0.88, borderLeft: seg.isGap ? 'none' : '1px solid rgba(0,0,0,0.25)', borderRight: seg.isGap ? 'none' : '1px solid rgba(0,0,0,0.25)', zIndex: 1, '&:hover': { opacity: 1, zIndex: 2 }, transition: 'opacity 0.1s' }}>
+            <Tooltip key={i} title={<span style={{whiteSpace:'pre-line'}}>{tipLabel}</span>} arrow placement="top" disableHoverListener={!!dragOverride || !!reassignAnchor}>
+              <Box
+                onClick={canReassign ? (e) => {
+                  if (wasDraggingRef.current) return; // don't open after drag
+                  setReassignSegment(seg);
+                  setReassignAnchor(e.currentTarget);
+                } : undefined}
+                sx={{ position: 'absolute', bottom: 0, left: `${lp}%`, width: `${wp}%`, height: `${hp}%`, minHeight: seg.isGap ? 0 : 2, bgcolor: color, opacity: seg.isGap ? 1 : 0.88, borderLeft: seg.isGap ? 'none' : '1px solid rgba(0,0,0,0.25)', borderRight: seg.isGap ? 'none' : '1px solid rgba(0,0,0,0.25)', zIndex: 1, cursor: canReassign ? 'pointer' : 'default', '&:hover': { opacity: 1, zIndex: 2 }, transition: 'opacity 0.1s' }}>
                 {canEdit && <Box onMouseDown={e=>handleMouseDown(e,i,'left')} sx={{ position:'absolute',left:0,top:0,bottom:0,width:6,cursor:'ew-resize',zIndex:3,'&:hover':{bgcolor:'rgba(255,255,255,0.25)'}}} />}
                 {canEdit && <Box onMouseDown={e=>handleMouseDown(e,i,'right')} sx={{ position:'absolute',right:0,top:0,bottom:0,width:6,cursor:'ew-resize',zIndex:3,'&:hover':{bgcolor:'rgba(255,255,255,0.25)'}}} />}
                 {canEdit && <Box onMouseDown={e=>handleMouseDown(e,i,'focus')} sx={{ position:'absolute',top:0,left:6,right:6,height:6,cursor:'ns-resize',zIndex:3,'&:hover':{bgcolor:'rgba(255,255,255,0.25)'}}} />}
@@ -425,6 +913,13 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
         {/* Now marker */}
         {isLive && nowMs < displayEndMs && <Box sx={{ position:'absolute',top:0,bottom:0,left:`${((nowMs-displayStartMs)/totalMs)*100}%`,width:'1px',bgcolor:'rgba(255,255,255,0.35)',zIndex:3 }} />}
       </Box>
+      <SessionReassignPopover
+        anchorEl={reassignAnchor}
+        onClose={() => { setReassignAnchor(null); setReassignSegment(null); }}
+        segment={reassignSegment}
+        pending={pending}
+        routine={routine}
+      />
     </Box>
   );
 }
@@ -447,27 +942,36 @@ export default function FocusTimeline() {
 
   const [drawerBlock, setDrawerBlock] = useState(null);
   const [mealSlot, setMealSlot]       = useState(null);
+  const [taskViewMode, setTaskViewMode] = useState('novel');
+  const [qualityAnchor, setQualityAnchor] = useState(null);
+  const [qualityDate, setQualityDate] = useState(null);
   const { data, isLoading, error }    = useFocusDay(selectedDate);
   const { data: calData }             = useCalendarEvents(displayDate);
   const { data: mealPlanData }        = useMealPlan(displayDate);
   const { data: mealsData }           = useMeals();
+  const { data: sleepData }           = useSleepData(displayDate);
   const setMealSlotMutation           = useSetMealSlot();
   const updateSessionMutation         = useUpdateSession();
+  const saveQualityMutation           = useSaveSleepQuality();
+  const { data: tasksData }           = useAllTasks();
+  const { data: timeData }            = useTimeSums();
+  const taskAction                    = useTaskAction();
 
   const mutateSessionRef = useRef(updateSessionMutation.mutate);
   mutateSessionRef.current = updateSessionMutation.mutate;
   const handleSessionUpdate = useCallback(updates => { mutateSessionRef.current(updates); }, []);
   const setMealSlotRef = useRef({ mutate: setMealSlotMutation.mutate, mealSlot, displayDate });
   setMealSlotRef.current = { mutate: setMealSlotMutation.mutate, mealSlot, displayDate };
-  const handleMealSelect = useCallback(mealId => {
+  const handleMealSelect = useCallback((mealId, status) => {
     const { mutate, mealSlot: slot, displayDate: date } = setMealSlotRef.current;
     if (!slot) return;
-    mutate({ date, slot, mealId });
+    const eatenAt = status === 'eaten' ? new Date().toISOString() : undefined;
+    mutate({ date, slot, mealId, status: mealId ? (status || 'planned') : null, eatenAt });
     setMealSlot(null);
   }, []);
 
-  const activeMeal = mealSlot
-    ? (mealsData?.meals||[]).find(m => m.id === (mealPlanData?.slots||[]).find(s=>s.slot===mealSlot)?.meal_id)
+  const activeSlotData = mealSlot
+    ? (mealPlanData?.slots || []).find(s => s.slot === mealSlot)
     : null;
 
   if (isLoading) return <LinearProgress />;
@@ -476,43 +980,143 @@ export default function FocusTimeline() {
 
   const { timeline, summary, dayStartMs, nowMs } = data;
 
+  // Sleep bridging: extend display back if sleep started before midnight
+  const lastNight = sleepData?.lastNight;
+  const sleepStartMs = lastNight?.sleepStart ? new Date(lastNight.sleepStart).getTime() : null;
+  const wakeTimeMs   = lastNight?.wakeTime   ? new Date(lastNight.wakeTime).getTime()   : null;
+
+  // Sleep duration formatting
+  const fmtSleep = (mins) => {
+    if (!mins) return '—';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  };
+
+  // Task data for the bottom panel
+  const currentTask = tasksData?.current?.task || null;
+  const pendingTasks = taskViewMode === 'routine'
+    ? (tasksData?.routine || []).filter(t => t.title !== 'general')
+    : (tasksData?.pending || []);
+  const daySums = timeData?.sums?.day || {};
+  const grouped = {};
+  for (const ctx of (CONTEXT_ORDER || [])) grouped[ctx] = [];
+  for (const task of pendingTasks) {
+    const ctx = task.activityContext || 'unstructured';
+    if (!grouped[ctx]) grouped[ctx] = [];
+    grouped[ctx].push(task);
+  }
+
   return (
     <Box>
+      {/* Current task — highlighted at the very top */}
+      <ActiveTask task={currentTask} action={taskAction} pending={tasksData?.pending} routine={tasksData?.routine} />
+
+      {/* Weekly goal commitments and progress */}
+      <WeeklyGoalsProgress />
+
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Focus Timeline</Typography>
         <IconButton size="small" onClick={() => setSelectedDate(addDays(displayDate, -1))}><ChevronLeftIcon /></IconButton>
-        <Typography variant="body2" sx={{ fontFamily: 'monospace', minWidth: 90, textAlign: 'center' }}>{isToday ? 'Today' : displayDate}</Typography>
+        <Typography variant="body2" sx={{ fontFamily: 'monospace', minWidth: 90, textAlign: 'center' }}>
+          {isToday ? 'Today' : displayDate}
+        </Typography>
+        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem' }}>
+          {new Date().toLocaleTimeString('en-US', { timeZoneName: 'short', timeZone: DISPLAY_TZ }).split(' ').pop()}
+        </Typography>
         <IconButton size="small" onClick={() => setSelectedDate(addDays(displayDate, 1))} disabled={isToday}><ChevronRightIcon /></IconButton>
         {!isToday && <IconButton size="small" onClick={() => setSelectedDate(null)}><TodayIcon /></IconButton>}
       </Stack>
 
-      <Stack direction="row" spacing={1.5} sx={{ mb: 3 }}>
-        <StatCard label="Focused Minutes" value={`${summary.focusedMins}m`} sub="Σ focus×mins, f>0" />
-        <StatCard label="Tracked" value={`${summary.pctTracked}%`} sub="of day" />
-        <StatCard label="Active Focus" value={`${summary.pctActive}%`} sub="tracked time at f>0" />
-      </Stack>
+      {(() => {
+        const totalMs = nowMs - dayStartMs;
+        const trackedMs = (summary.pctTracked / 100) * totalMs;
+        const sleepMs = lastNight ? lastNight.durationMinutes * 60000 : 0;
+        const activeMs = (summary.pctActive / 100) * trackedMs;
+        const awakeTrackedMs = trackedMs - sleepMs;
+        const pctActiveFocus = awakeTrackedMs > 60000 ? Math.min(100, Math.round((activeMs / awakeTrackedMs) * 100)) : (summary.pctActive || 0);
+        return (
+          <Stack direction="row" spacing={1.5} sx={{ mb: 2 }}>
+            <StatCard label="Focused Minutes" value={`${summary.focusedMins}m`} sub="Σ focus×mins, f>0" />
+            <StatCard label="Tracked" value={`${summary.pctTracked}%`} sub="of day" />
+            <StatCard label="Active Focus" value={`${pctActiveFocus}%`} sub="awake tracked time at f>0" />
+          </Stack>
+        );
+      })()}
+
 
       <Paper sx={{ p: 2, mb: 2 }}>
         <Stack direction="row" alignItems="center" sx={{ mb: 1.5 }}>
           <Typography variant="subtitle2" sx={{ flexGrow: 1, color: 'text.secondary' }}>{isToday ? "Today's Focus" : `${displayDate}`}</Typography>
           {isToday && <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem' }}>drag edges to edit · drag top for focus</Typography>}
         </Stack>
-        <TimelineBar timeline={timeline} dayStartMs={dayStartMs} nowMs={nowMs} onBlockClick={setDrawerBlock} isLive={!!data.isLive} onSessionUpdate={handleSessionUpdate} />
-        <TimeAxis dayStartMs={dayStartMs} nowMs={nowMs} />
+        <TimelineBar timeline={timeline} dayStartMs={dayStartMs} nowMs={nowMs} onBlockClick={setDrawerBlock} isLive={!!data.isLive} onSessionUpdate={handleSessionUpdate} sleepStartMs={sleepStartMs} wakeTimeMs={wakeTimeMs} pending={tasksData?.pending} routine={tasksData?.routine} />
+        <TimeAxis dayStartMs={dayStartMs} nowMs={nowMs} sleepStartMs={sleepStartMs} />
         {calData?.events?.length > 0 && (
           <>
             <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1, mb: 0.25, pl: `${Y_AXIS_WIDTH + 4}px`, fontSize: '0.58rem' }}>calendar</Typography>
-            <CalendarOverlay events={calData.events} dayStartMs={dayStartMs} nowMs={nowMs} />
+            <CalendarOverlay events={calData.events} dayStartMs={dayStartMs} nowMs={nowMs} sleepStartMs={sleepStartMs} />
           </>
         )}
         <FastingBar dayStartMs={dayStartMs} nowMs={nowMs} mealPlan={mealPlanData} meals={mealsData?.meals} onMealSlotClick={setMealSlot} />
         {mealPlanData?.macroTotals && <MacroBar macroTotals={mealPlanData.macroTotals} />}
+        <SleepBar
+          dayStartMs={dayStartMs} nowMs={nowMs}
+          sleepData={sleepData} sleepStartMs={sleepStartMs} wakeTimeMs={wakeTimeMs}
+          displayDate={displayDate}
+          onQualityClick={(e, date) => { setQualityAnchor(e.currentTarget); setQualityDate(date); }}
+        />
       </Paper>
+      <SleepQualityPopover
+        anchorEl={qualityAnchor}
+        onClose={() => { setQualityAnchor(null); setQualityDate(null); }}
+        date={qualityDate}
+        currentQuality={sleepData?.lastNight?.quality}
+        onSave={(date, quality) => saveQualityMutation.mutate({ date, quality })}
+      />
 
-      {isToday && <StateTracker />}
+      {/* Task management widgets */}
+      <Box sx={{ mt: 2, maxWidth: 900 }}>
+        <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 1.5 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            {taskViewMode === 'routine' ? 'Routine Tasks' : 'Pending Tasks'}
+          </Typography>
+          {tasksData && (
+            <>
+              <Chip label={`${pendingTasks.length} ${taskViewMode}`} variant="outlined" size="small" />
+              <Button size="small" variant={taskViewMode === 'routine' ? 'contained' : 'outlined'}
+                onClick={() => setTaskViewMode(taskViewMode === 'novel' ? 'routine' : 'novel')}
+                sx={{ fontSize: '0.7rem', minWidth: 70 }}>
+                {taskViewMode === 'routine' ? 'Routine' : 'Novel'}
+              </Button>
+              <Box sx={{ flexGrow: 1 }} />
+              <Button size="small" variant="outlined" onClick={() => taskAction.mutate({ action: 'pull-goog' })} disabled={taskAction.isPending}>
+                Pull Google Tasks
+              </Button>
+              <Button size="small" variant="outlined" onClick={() => taskAction.mutate({ action: 'pull-jira' })} disabled={taskAction.isPending}>
+                Pull Jira
+              </Button>
+            </>
+          )}
+        </Stack>
+        <AddTaskForm action={taskAction} />
+        {(CONTEXT_ORDER || []).map((ctx) => {
+          const ctxTasks = grouped[ctx] || [];
+          if (!ctxTasks.length) return null;
+          return (
+            <ContextGroup
+              key={ctx}
+              context={ctx}
+              tasks={ctxTasks}
+              daySums={daySums}
+              action={taskAction}
+            />
+          );
+        })}
+        <CompletedStrip completed={tasksData?.completed} />
+      </Box>
 
       <ProtocolDrawer query={drawerBlock?.protocol} label={drawerBlock?.label} onClose={() => setDrawerBlock(null)} />
-      <MealDrawer slot={mealSlot} meal={activeMeal} meals={mealsData?.meals} onSelect={handleMealSelect} onClose={() => setMealSlot(null)} />
+      <MealDrawer slot={mealSlot} slotData={activeSlotData} meals={mealsData?.meals} onSelect={handleMealSelect} onClose={() => setMealSlot(null)} />
     </Box>
   );
 }

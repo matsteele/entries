@@ -207,7 +207,7 @@ Google Calendar events are pulled and displayed as an overlay on the FocusTimeli
 
 ### Contexts
 
-Tasks and time are tracked across 7 contexts:
+Tasks and time are tracked across 8 contexts:
 
 | Context | Code | Emoji | Budget Role |
 |---------|------|-------|-------------|
@@ -217,6 +217,7 @@ Tasks and time are tracked across 7 contexts:
 | Cultivo | `cul` | 🌱 | Earning |
 | Projects | `proj` | 🚀 | Earning |
 | Health | `heal` | 💪 | Neutral |
+| Learning | `learn` | 📚 | Earning |
 | Unstructured | `us` | ☀️ | Spending |
 
 **Note on Journal Context:** In the PostgreSQL journal, both `prof` and `cul` work are stored under a single "professional" context. This keeps all work-related reflections, plans, and protocols together for comprehensive professional context analysis.
@@ -348,11 +349,14 @@ A Next.js 16 web app running at **http://localhost:7777**. No separate backend �
 
 | View | Description |
 |------|-------------|
-| **TasksView** | Current task card (with complete button), pending tasks grouped by context with inline focus/priority pickers, switch/complete/delete actions on hover, add-task form, Pull Google Tasks + Pull Jira buttons |
-| **FocusTimeline** | Day timeline with drag-editable session bars, date navigation, ideal schedule overlay, calendar event overlay, fasting bar with meal slots, meal drawer, macro totals bar, protocol drawer |
+| **TasksView** | Current task card, pending tasks grouped by context with play/check/delete actions per row, add-task form, Pull Google Tasks + Pull Jira buttons, completed strip (dashed-border boxes with hover popover) |
+| **FocusTimeline** | Day timeline with drag-editable session bars, date navigation, ideal schedule overlay, calendar event overlay, fasting bar with 5 sequential meal slot circles, macro totals bar, protocol drawer |
 | **TimeView** | Historical stacked bar charts (daily last 7 / weekly last 8 / monthly last 6) with focused-minutes trend line; today/week/month context breakdowns with progress bars; time budget balance |
 | **BudgetPanel** | Per-context focused-minutes progress bars vs. editable daily targets; headline total focused minutes |
-| **FeedsView** | Google Tasks + Jira feeds (1-min cache) with "Add to today" buttons; duplicate detection against pending list |
+| **EmailView** | Gmail inbox triage: auto-categorized into Needs Attention, Jobs, Informational, Marketing; bulk delete per category; "Clear Noise" deletes all marketing+informational; per-email actions (trash, create task); 1-hour auto-refresh |
+| **FeedsView** | Google Tasks + Jira feeds (1-min cache) with "Add to today" buttons; per-list context dropdown mapping; duplicate detection against pending list; source indicators (GT/Jira chips) |
+| **PlanningView** | Goals → Projects → Epics → Actions treemap; context inheritance (cascades down unless overridden); context/status/horizon/weight controls; add epic at project level, add action at epic level |
+| **MealsView** | 7-week meal planner grid (Sun→Sat); click any day to see/set its 5 sequential meal slots; meal picker drawer with category tabs sorted by protein; macro progress bars; Grocery List tab with week/all-ingredients modes, selectable items, copy/email |
 | **WorkoutView** | Workout tracking |
 
 ### FocusTimeline Details
@@ -400,13 +404,16 @@ CREATE TABLE meals (
   protein NUMERIC, carbs NUMERIC, fat NUMERIC, calories NUMERIC
 );
 
--- Daily meal plans
+-- Daily meal plans (5-slot sequential stack per day)
 CREATE TABLE meal_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   date DATE NOT NULL,
-  slot TEXT NOT NULL,       -- e.g. 'breakfast', 'lunch', 'dinner', 'snack-1'
+  slot TEXT NOT NULL,       -- 'meal-1' through 'meal-5' (filled sequentially)
   meal_id UUID REFERENCES meals(id),
   planned_time TIME,
+  status TEXT DEFAULT 'planned',  -- 'planned' | 'eating' | 'eaten'
+  eaten_at TIMESTAMPTZ,
+  notes TEXT,
   UNIQUE (date, slot)
 );
 
@@ -424,6 +431,16 @@ CREATE TABLE user_config (
 - `app/migrations/seed-meals.js` — 23 reference meals seeded
 
 **Session writes:** Every task switch/complete/pause writes a session row to `task_sessions` (fire-and-forget from CLI and daemons). `daily_time_snapshots` is legacy fallback for history charts when no session data exists for a period.
+
+### Planning Hierarchy (Goals → Projects → Epics → Actions)
+
+**Tables:** `goals`, `plans` (projects), `epics`, `actions`, `daily_intentions`
+
+**Context inheritance:** Each level can have an optional `context` field. Resolved as: `action.context ?? epic.context ?? project.context ?? goal.context ?? 'projects'`. Setting context on a node overrides the parent for everything below it.
+
+**Treemap API:** `GET /api/goals/treemap` returns the full hierarchy with resolved contexts at each level.
+
+**Push to daily:** Actions can be pushed to the daily task list from the PlanningView. The resolved context determines which local context the task gets.
 
 ### Reporting CLI
 
@@ -459,6 +476,8 @@ When switching to a task via CLI, the task title is matched against `journals WH
 | `POST /api/meals` | Create a meal |
 | `GET /api/meal-plans/:date` | Meal plan for date with macro totals |
 | `POST /api/meal-plans/:date` | Set or clear a meal slot |
+| `GET /api/email` | Gmail inbox: fetches unread emails, auto-categorizes into attention/jobs/informational/marketing |
+| `POST /api/email/action` | Email actions: `{ action: 'trash'\|'star'\|'archive'\|'read'\|'label-jobs', ids: [...] }` |
 | `GET /api/feeds/google-tasks` | Google Tasks feed |
 | `GET /api/feeds/jira` | Jira tickets feed |
 | `GET /api/contexts` | Context definitions |
@@ -474,7 +493,8 @@ When switching to a task via CLI, the task title is matched against `journals WH
 - Next.js 16, React 19, MUI v7, TanStack Query (React Query)
 - `app/frontend/lib/store.js` — wraps task-store for server-side use
 - `app/frontend/lib/db.js` — pg pool singleton for protocol queries
-- `app/frontend/lib/feeds.js` — Google Tasks + Jira helpers with 1-min module-level cache
+- `app/frontend/lib/feeds.js` — Google Tasks + Jira + Gmail helpers with module-level cache (1-min for tasks/jira, 60-min for email)
+- `app/cli/gmail-cli.js` — Standalone Gmail CLI: `trash`, `delete`, `star`, `unstar`, `archive`, `read`, `unread`, `label`, `labels`, `auth`
 - `app/frontend/lib/states.js` — state file read/write helpers
 - Environment: `app/frontend/.env.local` → symlink to root `.env`
 
@@ -483,8 +503,29 @@ When switching to a task via CLI, the task title is matched against `journals WH
 Google Tasks serves as the cloud task backlog. Tasks are created here when a plan generates actionable work, then pulled to the daily log when due.
 
 - **Pull due tasks**: `/t pull-goog` — imports tasks with today's due date into pending
-- **Dashboard feed**: `GET /api/feeds/google-tasks` — shows all incomplete tasks across all lists
+- **Dashboard feed**: `GET /api/feeds/google-tasks` — shows all incomplete tasks across all lists, grouped by list name
+- **List-to-context mapping**: Each Google Task list has a configurable context dropdown in the feeds view. Mapping saved to `user_config` as `google_task_list_mapping`. Auto-guesses from list name on first load.
+- **Source indicators**: Tasks pulled from Google Tasks show a "GT" chip; Jira tasks show their ticket number
+- **Completion sync**: Completing a task locally (CLI or dashboard) that has `googleTaskId` also marks it complete in Google Tasks (best-effort, non-blocking)
+- **Local delete ≠ Google delete**: Deleting from the local daily list does NOT remove from Google Tasks — the local list is "tasks planned for today"
+- **Metadata stored**: `googleTaskId`, `googleTaskListId` on pending tasks for sync
 - **Credentials**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` in `.env`
+
+### Gmail Integration
+
+Gmail emails are fetched and auto-categorized in the EmailView for inbox triage.
+
+- **Categories**: Needs Attention (starred or unknown senders), Jobs (recruiter/hiring keywords), Informational (shipping/receipts/alerts), Marketing (newsletters/promos)
+- **Actions**: Trash, star, archive, mark read, label (via Gmail API)
+- **Auto-categorization**: Pattern-based on sender domain, email address patterns, subject keywords
+- **Jobs detection**: Recruiter/talent acquisition/hiring/opportunity/career keywords
+- **Starred override**: Starred emails always appear in "Needs Attention"
+- **Dashboard feed**: `GET /api/email` — 60-min cache, manual refresh available
+- **Bulk actions**: "Clear Noise" trashes all marketing + informational; per-category "Delete All"
+- **Task creation**: Attention/Jobs emails can be converted to daily log tasks (prof context)
+- **CLI tool**: `app/cli/gmail-cli.js` for direct Gmail operations from terminal or Claude
+- **Credentials**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` in `.env`
+- **Auth**: `node app/cli/gmail-cli.js auth` — OAuth flow for Gmail scope (`https://mail.google.com/`)
 
 ---
 
@@ -536,6 +577,36 @@ cd app && npm run task:check
 tail -20 tracking/idle-monitor/idle-monitor.log
 tail -20 tracking/idle-monitor/task-checker.log
 ```
+
+## `/meals` Command Reference
+
+Log meals eaten or planned. Always searches the library for a close match first — Claude shows the top result and asks for confirmation before logging.
+
+| Command | Description |
+|---------|-------------|
+| `/meals "description"` | Search library → confirm match → log as **eaten**, next empty slot, today |
+| `/meals "description" 2` | Same but targets slot 2 specifically |
+| `/meals "description" -plan` | Search → confirm → log as **planned** for today |
+| `/meals "description" -plan 2026-04-08` | Planned for a specific date |
+| `/meals "description" -plan 2026-04-08 3` | Planned for specific date + slot |
+| `/meals "description" -reg [category]` | Save to library only (no slot logging) |
+| `/meals list` | List all saved meals grouped by category, sorted by protein |
+| `/meals grocery [date]` | Generate grocery list from planned meals (defaults today) |
+
+**Flow when a match is found:**
+```
+Found: Scrambled eggs with spinach, mushrooms, zucchini and avocado toast
+452 kcal · 22g P · 31g F · 31g C
+
+Is this it? (yes / no / #2 to use 2nd match)
+```
+- **yes** → log it
+- **no** → estimate via GPT, add as new meal, log it
+- **#2 / #3** → use that match instead
+
+**Meal library:** 52 meals seeded from spreadsheet across breakfast/lunch/dinner/snack, all with macros. CLI: `app/cli/meals-cli.js`
+
+---
 
 ## `/t` Command Reference
 
@@ -593,4 +664,4 @@ Quick check-in mode for processing distraction urges. Does NOT pause or change t
 
 ---
 
-**Last Updated:** 2026-04-04
+**Last Updated:** 2026-04-11

@@ -18,12 +18,58 @@ All data stays on your machine. No cloud database.
 - **Time Tracking**: Time by context - personal, professional, cultivo, social, projects (JSON)
 - **Semantic Search**: Find entries by meaning, not just keywords (OpenAI embeddings)
 
+## Daily Task Tracking Workflow
+
+The system has **two separate task lists**:
+
+1. **Google Tasks (Cloud Backlog)** - Long-term planning
+   - Create tasks from plans/goals
+   - Store tasks in Google Tasks for later review
+   - Tasks live here until you're ready to work on them
+
+2. **Daily Log (Local JSON)** - Tasks you're working on TODAY
+   - Pull today's tasks from Google Tasks via `/t pull-goog`
+   - Or manually add with `/t add "task description"`
+   - Tasks tracked in `tracking/pending.json` and `tracking/routine.json`
+
+### Task Status Line (Synced Across Environments)
+
+The same task list appears in **three places simultaneously**:
+
+1. **Claude Code Status Line** (top right of interface)
+   - Shows current task and pending list
+   - Configured via `~/.claude/statusline-command.sh`
+   - Updates when task state changes
+
+2. **ZSH Prompt** (terminal prompt line)
+   - Shows current task and counts inline
+   - Configured in `~/.zshrc` (PROMPT variable)
+   - Displayed on every command
+
+3. **Terminal Display** (`/t` command)
+   - Full detailed view: `node ~/projects/currentProjects/entries/app/cli/statusline.js`
+   - Shows all pending/routine tasks with time spent
+   - Run `/t` or `todos` to refresh
+
+All three pull from the same source (`tracking/` JSON files via `app/cli/statusline.js`), so you always see the same task list everywhere.
+
+**The workflow:**
+```
+Plan → Google Tasks (set due date) → /t pull-goog → Daily Log → Work & Track → Complete
+```
+
+When you see tasks in any statusline, they are either:
+- **Pending tasks** from today's pull (not yet started)
+- **Routine tasks** for ongoing contexts (never "complete")
+
+See `CLAUDE.md` section "Daily Task Tracking Workflow" for full details.
+
 ## Getting Started
 
 ```bash
 # Install dependencies
 npm install
-cd app/backend && npm install
+cd app && npm install
 
 # Configure .env
 DATABASE_URL=postgresql://matthewsteele@localhost:5432/entries
@@ -37,11 +83,13 @@ See `ARCHITECTURE.md` for full setup and schema details.
 
 ## Project Structure
 
-- `app/backend/` - Backend services and CLI tools
+- `app/backend/` - Shared libraries (task-store, google-calendar, embeddings, server)
+- `app/cli/` - CLI entry points
   - `daily-log-cli.js` - Daily task tracking CLI
   - `time-tracker.js` - Time tracking by context
   - `statusline.js` - Terminal statusline display
   - `prompt.js` - ZSH prompt integration
+- `app/daemons/` - Background launchd agents (idle-monitor, task-checker)
 - `protocols/` - Protocol documents (also stored in database)
   - `digesting-entries.md` - Stream-of-consciousness ingestion protocol
 - `plans/` - Planning system

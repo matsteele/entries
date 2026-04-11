@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
 import {
   Box, Typography, Paper, Chip, Collapse, IconButton,
-  List, ListItem, ListItemText, LinearProgress, Stack,
-  TextField, Select, MenuItem, FormControl, Button,
+  List, ListItem, ListItemButton, ListItemText, LinearProgress, Stack,
+  TextField, Select, MenuItem, FormControl, Button, Drawer, Tabs, Tab,
   Popover, ToggleButton, ToggleButtonGroup, Tooltip,
-  CircularProgress,
+  CircularProgress, Divider,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckIcon from '@mui/icons-material/Check';
 import DeleteIcon from '@mui/icons-material/Delete';
+import PauseIcon from '@mui/icons-material/Pause';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AddIcon from '@mui/icons-material/Add';
 import { useAllTasks, useTimeSums, useTaskAction } from '../hooks/useApi';
 import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
@@ -23,10 +25,11 @@ const CTX_OPTIONS = [
   { value: 'soc', label: '👥 Social' },
   { value: 'proj', label: '🚀 Projects' },
   { value: 'heal', label: '💪 Health' },
+  { value: 'rest', label: '😴 Rest' },
   { value: 'us', label: '☀️ Unstructured' },
 ];
 
-function LevelPopover({ label, value, max, onSelect, pending }) {
+export function LevelPopover({ label, value, max, onSelect, pending }) {
   const [anchor, setAnchor] = useState(null);
   const levels = Array.from({ length: max + 1 }, (_, i) => i);
   return (
@@ -64,8 +67,11 @@ function LevelPopover({ label, value, max, onSelect, pending }) {
   );
 }
 
-function ActiveTask({ task, action }) {
+export function ActiveTask({ task, action, pending, routine }) {
   const [elapsed, setElapsed] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [tab, setTab] = useState(0);
+  const [noteText, setNoteText] = useState('');
 
   useEffect(() => {
     if (!task?.startedAt) return;
@@ -90,122 +96,310 @@ function ActiveTask({ task, action }) {
   const isRoutine = task.sourceType === 'routine';
   const isUs = task.activityContext === 'us';
   const fl = task.focusLevel != null ? task.focusLevel : isUs ? 0 : isRoutine ? 1 : 2;
+  const busy = action.isPending;
+
+  const switchTasks = tab === 0 ? (pending || []) : (routine || []).filter(t => t.title !== 'general');
+  const switchFiltered = switchTasks.filter(t => t.id !== task.id);
+  const switchGrouped = {};
+  for (const t of switchFiltered) {
+    const c = t.activityContext || 'unstructured';
+    if (!switchGrouped[c]) switchGrouped[c] = [];
+    switchGrouped[c].push(t);
+  }
+
+  const handleSwitch = (toTask) => {
+    action.mutate({ action: 'switch-to', taskId: toTask.id }, { onSuccess: () => setDrawerOpen(false) });
+  };
+
+  const handleAddNote = () => {
+    if (!noteText.trim()) return;
+    action.mutate({ action: 'add-note', text: noteText.trim() }, { onSuccess: () => setNoteText('') });
+  };
 
   return (
-    <Paper sx={{ p: 2, mb: 3, borderLeft: `4px solid ${ctx.color || '#666'}` }}>
-      <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
-        <PlayArrowIcon sx={{ color: '#4caf50', animation: 'pulse 1.5s infinite' }} />
-        <Typography variant="h6" sx={{ flexGrow: 1 }}>{task.title}</Typography>
-        <Chip label={`f:${fl}`} size="small" variant="outlined" sx={{ fontSize: '0.7rem', opacity: task.focusLevel != null ? 1 : 0.5 }} />
-        {task.priority != null && (
-          <Chip label={`p:${task.priority}`} size="small" variant="outlined" sx={{ fontSize: '0.7rem' }} />
+    <>
+      <Paper sx={{ p: 2, mb: 3, borderLeft: `4px solid ${ctx.color || '#666'}` }}>
+        <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
+          <PlayArrowIcon sx={{ color: '#4caf50', animation: 'pulse 1.5s infinite' }} />
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>{task.title}</Typography>
+          <LevelPopover label="f" value={fl} max={5} pending={busy}
+            onSelect={(v) => action.mutate({ action: 'set-focus', taskId: task.id, level: v })} />
+          <LevelPopover label="p" value={task.priority} max={5} pending={busy}
+            onSelect={(v) => action.mutate({ action: 'set-priority', taskId: task.id, level: v })} />
+          <Chip label={`${ctx.emoji} ${ctx.label}`} size="small" sx={{ bgcolor: ctx.color, color: '#fff' }} />
+          <Typography variant="h6" sx={{ fontFamily: 'monospace', minWidth: 70, textAlign: 'right' }}>
+            {formatMinutes(elapsed)}
+          </Typography>
+          <Tooltip title="Switch task">
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<SwapHorizIcon />}
+              onClick={() => setDrawerOpen(true)}
+              sx={{ ml: 1 }}
+            >
+              Change
+            </Button>
+          </Tooltip>
+          <Tooltip title="Pause (move to pending)">
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={busy ? <CircularProgress size={14} /> : <PauseIcon />}
+              onClick={() => action.mutate({ action: 'pause-current' })}
+              disabled={busy}
+            >
+              Pause
+            </Button>
+          </Tooltip>
+          {!isRoutine && (
+            <Tooltip title="Complete current task">
+              <Button
+                size="small"
+                variant="contained"
+                color="success"
+                startIcon={busy ? <CircularProgress size={14} /> : <CheckIcon />}
+                onClick={() => action.mutate({ action: 'complete-current' })}
+                disabled={busy}
+              >
+                Complete
+              </Button>
+            </Tooltip>
+          )}
+        </Stack>
+        {task.notes?.length > 0 && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            {task.notes[task.notes.length - 1]?.text ?? task.notes[task.notes.length - 1]}
+          </Typography>
         )}
-        <Chip label={`${ctx.emoji} ${ctx.label}`} size="small" sx={{ bgcolor: ctx.color, color: '#fff' }} />
-        <Typography variant="h6" sx={{ fontFamily: 'monospace', minWidth: 70, textAlign: 'right' }}>
-          {formatMinutes(elapsed)}
-        </Typography>
-        <Tooltip title="Complete current task">
-          <Button
-            size="small"
-            variant="contained"
-            color="success"
-            startIcon={action.isPending ? <CircularProgress size={14} /> : <CheckIcon />}
-            onClick={() => action.mutate({ action: 'complete-current' })}
-            disabled={action.isPending}
-            sx={{ ml: 1 }}
-          >
-            Complete
-          </Button>
-        </Tooltip>
-      </Stack>
-      {task.notes?.length > 0 && (
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          {task.notes[task.notes.length - 1]?.text ?? task.notes[task.notes.length - 1]}
-        </Typography>
-      )}
-      <style>{`@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }`}</style>
-    </Paper>
+        <style>{`@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }`}</style>
+      </Paper>
+
+      <Drawer anchor="right" open={drawerOpen} onClose={() => setDrawerOpen(false)}
+        PaperProps={{ sx: { width: 360, bgcolor: 'background.default' } }}>
+        <Box sx={{ p: 2 }}>
+          <Typography variant="h6" sx={{ mb: 0.5 }}>Current Task</Typography>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+            <Typography sx={{ mr: 0.5 }}>{ctx.emoji}</Typography>
+            <Typography variant="body1" sx={{ fontWeight: 600, flexGrow: 1 }}>{task.title}</Typography>
+            <Chip label={formatMinutes(elapsed)} size="small" variant="outlined" sx={{ fontFamily: 'monospace' }} />
+          </Stack>
+          <Stack direction="row" spacing={0.5} sx={{ mb: 2 }}>
+            <LevelPopover label="f" value={fl} max={5} pending={busy}
+              onSelect={(v) => action.mutate({ action: 'set-focus', taskId: task.id, level: v })} />
+            <LevelPopover label="p" value={task.priority} max={5} pending={busy}
+              onSelect={(v) => action.mutate({ action: 'set-priority', taskId: task.id, level: v })} />
+          </Stack>
+        </Box>
+
+        <Divider />
+
+        {/* Notes section */}
+        <Box sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Notes</Typography>
+          {task.notes?.length > 0 && (
+            <Box sx={{ mb: 1.5, maxHeight: 120, overflow: 'auto' }}>
+              {task.notes.map((n, i) => (
+                <Typography key={i} variant="body2" color="text.secondary" sx={{ mb: 0.5, fontSize: '0.8rem' }}>
+                  {n?.text ?? n}
+                </Typography>
+              ))}
+            </Box>
+          )}
+          <Stack direction="row" spacing={1}>
+            <TextField
+              size="small"
+              placeholder="Add a note..."
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddNote(); }}
+              sx={{ flexGrow: 1 }}
+              fullWidth
+            />
+            <Button size="small" variant="outlined" onClick={handleAddNote} disabled={busy || !noteText.trim()}>
+              Add
+            </Button>
+          </Stack>
+        </Box>
+
+        <Divider />
+
+        {/* Task switcher */}
+        <Box sx={{ px: 2, pt: 1.5 }}>
+          <Typography variant="subtitle2">Switch to:</Typography>
+        </Box>
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
+          sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, fontSize: '0.75rem' } }}>
+          <Tab label="Novel" />
+          <Tab label="Routine" />
+        </Tabs>
+        <List dense sx={{ overflow: 'auto', flexGrow: 1, py: 0 }}>
+          {CONTEXT_ORDER.map(c => {
+            const ctxTasks = switchGrouped[c];
+            if (!ctxTasks?.length) return null;
+            const cfg = CONTEXT_CONFIG[c] || {};
+            return ctxTasks.map(t => (
+              <ListItemButton key={t.id} onClick={() => handleSwitch(t)} disabled={busy} sx={{ py: 0.5 }}>
+                <ListItemText
+                  primary={`${cfg.emoji} ${t.title}`}
+                  primaryTypographyProps={{ variant: 'body2', fontSize: '0.82rem', noWrap: true }}
+                />
+                {t.timeSpent > 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', ml: 1 }}>
+                    {formatMinutes(t.timeSpent)}
+                  </Typography>
+                )}
+              </ListItemButton>
+            ));
+          })}
+          {switchFiltered.length === 0 && (
+            <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+              No tasks available
+            </Typography>
+          )}
+        </List>
+      </Drawer>
+    </>
   );
 }
 
-function TaskRow({ task, taskN, action }) {
-  const [hovered, setHovered] = useState(false);
-  const ctx = CONTEXT_CONFIG[task.activityContext] || {};
-  const isRoutine = task.sourceType === 'routine';
-  const isUs = task.activityContext === 'us';
-  const fl = task.focusLevel != null ? task.focusLevel : isUs ? 0 : isRoutine ? 1 : 2;
+export function TaskRow({ task, action }) {
   const busy = action.isPending;
 
   return (
     <ListItem
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      sx={{ pl: 2, borderBottom: '1px solid', borderColor: 'divider', pr: 1 }}
-      secondaryAction={
-        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ opacity: hovered ? 1 : 0.3, transition: 'opacity 0.15s' }}>
-          <Tooltip title="Switch to this task">
-            <IconButton
-              size="small"
-              onClick={() => action.mutate({ action: 'switch-to', taskN })}
-              disabled={busy}
-            >
-              <PlayArrowIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Complete task">
-            <IconButton
-              size="small"
-              onClick={() => action.mutate({ action: 'complete-task', taskN })}
-              disabled={busy}
-            >
-              <CheckIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Delete task">
-            <IconButton
-              size="small"
-              color="error"
-              onClick={() => action.mutate({ action: 'delete-task', taskN })}
-              disabled={busy}
-            >
-              <DeleteIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Stack>
-      }
+      disableGutters
+      sx={{ px: 2, py: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}
     >
-      <ListItemText
-        primary={
-          <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
-            <Typography variant="body2" sx={{ flexGrow: 1 }}>{task.title}</Typography>
-            <LevelPopover
-              label="f"
-              value={fl}
-              max={5}
-              pending={busy}
-              onSelect={(v) => action.mutate({ action: 'set-focus', taskN, level: v })}
-            />
-            <LevelPopover
-              label="p"
-              value={task.priority}
-              max={5}
-              pending={busy}
-              onSelect={(v) => action.mutate({ action: 'set-priority', taskN, level: v })}
-            />
-            {task.jiraTicket && (
-              <Chip label={task.jiraTicket} size="small" variant="outlined" sx={{ fontSize: '0.7rem' }} />
-            )}
-            {task.timeSpent ? (
-              <Chip label={formatMinutes(task.timeSpent)} size="small" variant="outlined" sx={{ fontSize: '0.7rem' }} />
-            ) : null}
-          </Stack>
-        }
-      />
+      <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
+        <Tooltip title="Switch to">
+          <IconButton size="small" onClick={() => action.mutate({ action: 'switch-to', taskId: task.id })} disabled={busy}>
+            <PlayArrowIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+        <Typography variant="body2" sx={{ flexGrow: 1, lineHeight: 1.4 }}>{task.title}</Typography>
+        {task.timeSpent ? (
+          <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', whiteSpace: 'nowrap' }}>
+            {formatMinutes(task.timeSpent)}
+          </Typography>
+        ) : null}
+        {task.jiraTicket && (
+          <Chip label={task.jiraTicket} size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+        )}
+        {task.googleTaskId && !task.jiraTicket && (
+          <Tooltip title="From Google Tasks">
+            <Chip label="GT" size="small" variant="outlined" sx={{ fontSize: '0.6rem', height: 18, opacity: 0.7 }} />
+          </Tooltip>
+        )}
+        <Tooltip title="Complete">
+          <IconButton size="small" onClick={() => action.mutate({ action: 'complete-task', taskId: task.id })} disabled={busy}>
+            <CheckIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Delete">
+          <IconButton size="small" color="error" onClick={() => action.mutate({ action: 'delete-task', taskId: task.id })} disabled={busy} sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}>
+            <DeleteIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Tooltip>
+      </Stack>
     </ListItem>
   );
 }
 
-function ContextGroup({ context, tasks, daySums, action, taskNOffset }) {
+export function CompletedStrip({ completed }) {
+  const [anchor, setAnchor] = useState(null);
+  const [activeTask, setActiveTask] = useState(null);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayCompleted = (completed || []).filter(t =>
+    t.sessions?.some(s => s.endedAt?.startsWith(today))
+  );
+
+  if (!todayCompleted.length) return null;
+
+  const handleEnter = (e, task) => {
+    setAnchor(e.currentTarget);
+    setActiveTask(task);
+  };
+  const handleLeave = () => {
+    setAnchor(null);
+    setActiveTask(null);
+  };
+
+  const activeCfg = activeTask ? (CONTEXT_CONFIG[activeTask.activityContext] || {}) : {};
+
+  return (
+    <Box sx={{ mt: 2.5 }}>
+      <Typography variant="caption" color="text.disabled" sx={{ mb: 1, display: 'block' }}>
+        {todayCompleted.length} completed
+      </Typography>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+        {todayCompleted.map((t, i) => {
+          const cfg = CONTEXT_CONFIG[t.activityContext] || {};
+          return (
+            <Box
+              key={t.id || i}
+              onMouseEnter={(e) => handleEnter(e, t)}
+              onMouseLeave={handleLeave}
+              sx={{
+                width: 120,
+                height: 48,
+                borderRadius: 1.5,
+                border: `1.5px dashed ${cfg.color || '#555'}`,
+                bgcolor: 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: 0.35,
+                cursor: 'default',
+                transition: 'opacity 0.15s',
+                '&:hover': { opacity: 0.8 },
+                overflow: 'hidden',
+                px: 1,
+              }}
+            >
+              <Typography variant="caption" noWrap sx={{ fontSize: '0.65rem', color: cfg.color || '#888' }}>
+                {cfg.emoji} {t.title}
+              </Typography>
+            </Box>
+          );
+        })}
+      </Box>
+      <Popover
+        open={Boolean(anchor)}
+        anchorEl={anchor}
+        onClose={handleLeave}
+        disableRestoreFocus
+        sx={{ pointerEvents: 'none' }}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        {activeTask && (
+          <Box sx={{ p: 1.5, maxWidth: 300 }}>
+            <Stack direction="row" alignItems="center" spacing={0.75}>
+              <Typography sx={{ fontSize: '0.9rem' }}>{activeCfg.emoji}</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>{activeTask.title}</Typography>
+            </Stack>
+            <Stack direction="row" spacing={1.5} sx={{ mt: 0.75 }}>
+              <Chip label={activeCfg.label} size="small" sx={{ bgcolor: activeCfg.color, color: '#fff', fontSize: '0.65rem', height: 20 }} />
+              {activeTask.timeSpent > 0 && (
+                <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
+                  {formatMinutes(activeTask.timeSpent)}
+                </Typography>
+              )}
+              {activeTask.category && activeTask.category !== 'General' && (
+                <Typography variant="caption" color="text.secondary">{activeTask.category}</Typography>
+              )}
+            </Stack>
+          </Box>
+        )}
+      </Popover>
+    </Box>
+  );
+}
+
+export function ContextGroup({ context, tasks, daySums, action }) {
   const [open, setOpen] = useState(true);
   const cfg = CONTEXT_CONFIG[context] || {};
   const contextMinutes = daySums?.[context] || 0;
@@ -236,7 +430,6 @@ function ContextGroup({ context, tasks, daySums, action, taskNOffset }) {
             <TaskRow
               key={t.id || i}
               task={t}
-              taskN={taskNOffset + i + 1}
               action={action}
             />
           ))}
@@ -246,7 +439,8 @@ function ContextGroup({ context, tasks, daySums, action, taskNOffset }) {
   );
 }
 
-function AddTaskForm({ action }) {
+export function AddTaskForm({ action }) {
+  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [ctx, setCtx] = useState('');
   const busy = action.isPending;
@@ -254,46 +448,48 @@ function AddTaskForm({ action }) {
   const submit = () => {
     if (!title.trim()) return;
     action.mutate({ action: 'add-task', title: title.trim(), context: ctx }, {
-      onSuccess: () => { setTitle(''); setCtx(''); },
+      onSuccess: () => { setTitle(''); setCtx(''); setOpen(false); },
     });
   };
 
   return (
-    <Paper sx={{ p: 2, mb: 3 }}>
-      <Typography variant="subtitle2" sx={{ mb: 1.5, fontWeight: 600 }}>Add Task</Typography>
-      <Stack direction="row" spacing={1} alignItems="center">
-        <TextField
-          size="small"
-          placeholder="Task description..."
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-          sx={{ flexGrow: 1 }}
-          disabled={busy}
-        />
-        <FormControl size="small" sx={{ minWidth: 140 }}>
-          <Select
-            value={ctx}
-            onChange={(e) => setCtx(e.target.value)}
-            displayEmpty
-            disabled={busy}
-          >
-            {CTX_OPTIONS.map(o => (
-              <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+    <Box sx={{ mb: 2 }}>
+      {!open ? (
         <Button
-          variant="contained"
           size="small"
-          startIcon={busy ? <CircularProgress size={14} /> : <AddIcon />}
-          onClick={submit}
-          disabled={busy || !title.trim()}
+          variant="outlined"
+          startIcon={<AddIcon />}
+          onClick={() => setOpen(true)}
+          sx={{ color: 'text.secondary', borderColor: 'rgba(255,255,255,0.12)', fontSize: '0.75rem' }}
         >
-          Add
+          Add Task
         </Button>
-      </Stack>
-    </Paper>
+      ) : (
+        <Paper sx={{ p: 1.5 }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <TextField
+              autoFocus
+              size="small"
+              placeholder="Task description..."
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') setOpen(false); }}
+              sx={{ flexGrow: 1 }}
+              disabled={busy}
+            />
+            <FormControl size="small" sx={{ minWidth: 120 }}>
+              <Select value={ctx} onChange={(e) => setCtx(e.target.value)} displayEmpty disabled={busy}>
+                {CTX_OPTIONS.map(o => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <Button size="small" variant="contained"
+              startIcon={busy ? <CircularProgress size={14} /> : <AddIcon />}
+              onClick={submit} disabled={busy || !title.trim()}>Add</Button>
+            <Button size="small" onClick={() => setOpen(false)} sx={{ minWidth: 0, px: 1 }}>✕</Button>
+          </Stack>
+        </Paper>
+      )}
+    </Box>
   );
 }
 
@@ -320,9 +516,6 @@ export default function TasksView() {
     grouped[ctx].push(task);
   }
 
-  // Build context-ordered flat list to compute per-task numbers (1-indexed, all-tasks view)
-  const flatOrdered = CONTEXT_ORDER.flatMap(ctx => grouped[ctx] || []);
-
   const completedCount = completed.filter((t) => {
     const today = new Date().toISOString().slice(0, 10);
     return t.sessions?.some((s) => s.endedAt?.startsWith(today));
@@ -332,7 +525,6 @@ export default function TasksView() {
     <Box>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
         <Typography variant="h5">Today's Tasks</Typography>
-        <Chip label={`${completedCount} completed`} color="success" size="small" />
         <Chip label={`${pending.length} pending`} variant="outlined" size="small" />
         <Box sx={{ flexGrow: 1 }} />
         <Button
@@ -360,9 +552,6 @@ export default function TasksView() {
       {CONTEXT_ORDER.map((ctx) => {
         const ctxTasks = grouped[ctx] || [];
         if (!ctxTasks.length) return null;
-        // Find the offset in flatOrdered for this context's tasks
-        const firstTask = ctxTasks[0];
-        const offset = flatOrdered.indexOf(firstTask);
         return (
           <ContextGroup
             key={ctx}
@@ -370,10 +559,11 @@ export default function TasksView() {
             tasks={ctxTasks}
             daySums={daySums}
             action={action}
-            taskNOffset={offset}
           />
         );
       })}
+
+      <CompletedStrip completed={completed} />
     </Box>
   );
 }

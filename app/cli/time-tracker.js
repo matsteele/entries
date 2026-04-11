@@ -24,7 +24,7 @@ const path = require('path');
 const {
   BASE_DIR, TIME_LOG_FILE,
   loadCurrent, calculateContextSums, calculateElapsedMinutes, getLocalDate
-} = require('./task-store');
+} = require('../backend/task-store');
 
 const ARCHIVE_DIR = path.join(BASE_DIR, 'tracking', 'archive', 'daily-logs');
 const TIME_LOG_DIR = path.join(BASE_DIR, 'tracking', 'time-logs');
@@ -262,7 +262,7 @@ function archiveDayTime(date) {
 
 // Time Budget Constants
 const EARNING_RATE = 0.1;
-const EARNING_CONTEXTS = ['personal', 'social', 'professional', 'cultivo', 'projects'];
+const EARNING_CONTEXTS = ['personal', 'social', 'professional', 'cultivo', 'projects', 'learning'];
 const SPENDING_CONTEXTS = ['unstructured'];
 
 /**

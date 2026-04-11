@@ -1,19 +1,22 @@
 {
   "scripts": {
-    "start": "cd app/backend && node server.js",
-    "journal:add": "cd app/backend && node journal-cli.js add",
-    "journal:view": "cd app/backend && node journal-cli.js view",
-    "journal:today": "cd app/backend && node journal-cli.js today",
-    "plan:create": "cd app/backend && node plan-cli.js create",
-    "plan:list": "cd app/backend && node plan-cli.js list",
-    "daily:start": "cd app/backend && node daily-cli.js start",
-    "daily:view": "cd app/backend && node daily-cli.js view",
-    "log:current": "cd app/backend && node daily-log-cli.js current",
-    "log:show": "cd app/backend && node daily-log-cli.js show",
-    "time:week": "cd app/backend && node time-tracker.js week"
+    "start": "cd app && node backend/server.js",
+    "dev": "cd app/frontend && npm run dev",
+    "journal:add": "cd app && node cli/journal-cli.js add",
+    "journal:view": "cd app && node cli/journal-cli.js view",
+    "journal:today": "cd app && node cli/journal-cli.js today",
+    "plan:create": "cd app && node cli/plan-cli.js create",
+    "plan:list": "cd app && node cli/plan-cli.js list",
+    "daily:start": "cd app && node cli/daily-cli.js start",
+    "daily:view": "cd app && node cli/daily-cli.js view",
+    "log:current": "cd app && node cli/daily-log-cli.js current",
+    "log:show": "cd app && node cli/daily-log-cli.js show",
+    "time:week": "cd app && node cli/time-tracker.js week"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "googleapis": "^171.4.0",
     "uuid": "^13.0.0"
   }
 }

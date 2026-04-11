@@ -13,7 +13,7 @@ import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
 
 const CTX_CODE_TO_NAME = {
   cul: 'cultivo', prof: 'professional', per: 'personal',
-  soc: 'social', proj: 'projects', heal: 'health', us: 'unstructured',
+  soc: 'social', proj: 'projects', heal: 'health', learn: 'learning', us: 'unstructured',
 };
 
 function ContextBudgetRow({ code, cfg, minutesToday, target, focusedMins, onSaveTarget }) {
@@ -130,8 +130,8 @@ export default function BudgetPanel() {
   return (
     <Paper sx={{ p: 2, mb: 2 }}>
       <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
-        <Typography variant="h6">Context Budgets</Typography>
-        <Chip label={`${formatMinutes(totalMinutesToday)} today`} size="small" color="primary" />
+        <Typography variant="h6">Weekly Context Budgets</Typography>
+        <Chip label={`${formatMinutes(totalMinutesToday)} this week`} size="small" color="primary" />
         {focusedMins > 0 && (
           <Chip label={`${formatMinutes(focusedMins)} focused`} size="small" color="secondary" />
         )}

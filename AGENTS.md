@@ -75,7 +75,7 @@ For the full list of contexts, codes, emojis, and budget roles, see **[ARCHITECT
 **Example: Changing `npm run log:*` commands**
 
 **✅ UPDATE:**
-- `app/backend/package.json` - Script definitions
+- `app/package.json` - Script definitions
 - `CLAUDE.md` - NPM commands section (lines 217-233)
 - Any `.zshrc` aliases that wrap these commands
 
@@ -99,11 +99,11 @@ For the full list of contexts, codes, emojis, and budget roles, see **[ARCHITECT
 | `AGENTS.md` | This file - sync guidance | Architectural patterns, sync requirements |
 | `ARCHITECTURE.md` | System architecture | Schema, contexts, command reference table |
 | `tracking/SESSION_ACTIVITY_TRACKING.md` | Command details | Full `/t` docs, routine/novel, time budget, auto-detection |
-| `app/backend/package.json` | NPM scripts | Script names, parameters, what they do |
-| `app/backend/daily-log-cli.js` | CLI implementation | Actual command behavior |
-| `app/backend/statusline.js` | Status display | What info is shown in terminal |
-| `app/backend/prompt.js` | ZSH prompt | Current task in prompt line |
-| `app/backend/time-tracker.js` | Time tracking | Context time, budget calculations |
+| `app/package.json` | NPM scripts | Script names, parameters, what they do |
+| `app/cli/daily-log-cli.js` | CLI implementation | Actual command behavior |
+| `app/cli/statusline.js` | Status display | What info is shown in terminal |
+| `app/cli/prompt.js` | ZSH prompt | Current task in prompt line |
+| `app/cli/time-tracker.js` | Time tracking | Context time, budget calculations |
 | `.mcp.json` | MCP server configuration | Available tools and their descriptions |
 
 ---
@@ -178,12 +178,21 @@ entries/
 ├── .mcp.json                         ← MCP server config
 ├── .claude/
 │   └── settings.local.json          ← Claude Code MCP tools
-├── app/backend/
-│   ├── daily-log-cli.js             ← Main CLI implementation
-│   ├── statusline.js                ← Terminal status display
-│   ├── prompt.js                    ← ZSH prompt integration
-│   ├── time-tracker.js              ← Time tracking + time budget logic
-│   └── package.json                 ← NPM scripts
+├── app/
+│   ├── package.json                 ← NPM scripts (shared across cli/backend/daemons)
+│   ├── backend/                     ← Shared libraries + server
+│   │   ├── task-store.js            ← Core data layer (split-file I/O)
+│   │   ├── google-calendar.js       ← Calendar API helper
+│   │   ├── embeddings.js            ← Semantic search + pgvector
+│   │   └── server.js                ← Express REST API
+│   ├── cli/                         ← Terminal entry points
+│   │   ├── daily-log-cli.js         ← Main CLI implementation
+│   │   ├── statusline.js            ← Terminal status display
+│   │   ├── prompt.js                ← ZSH prompt integration
+│   │   └── time-tracker.js          ← Time tracking + time budget logic
+│   └── daemons/                     ← Background launchd agents
+│       ├── idle-monitor.js          ← Auto-pause on idle (every 2 min)
+│       └── task-checker.js          ← Check-in dialog (every 30 min)
 └── ~/.zshrc                         ← User's shell config (EXTERNAL)
 ```
 
@@ -217,4 +226,47 @@ When you (Claude or another agent) are asked to modify this application:
 5. **Ask if uncertain** - better to clarify than break the user's workflow
 
 **Remember:** The user relies on this application multiple times per day, every day. Consistency and reliability across both environments is critical to their productivity.
+
+---
+
+## Database Entry Management: Update Over Create
+
+When the user asks you to log or create a database entry (journal, plan, protocol, contemplation):
+
+**✅ ALWAYS DO THIS FIRST:**
+1. Search for existing related entries using relevant keywords and content patterns
+2. If you find entries with similarity > 0.8 or clear thematic relationship:
+   - **Update the existing entry** with new information
+   - Add new sections, refine thinking, update status
+   - Use SQL UPDATE with the entry's id
+3. **Only create new entries when no relevant match exists**
+
+**✅ WHY THIS MATTERS:**
+- Prevents duplicate information scattered across multiple entries
+- Allows plans and protocols to evolve and stay current
+- Makes semantic search more effective (fewer but richer entries)
+- Reduces database clutter while preserving narrative evolution
+- Follows the principle: "Update existing entries when appropriate rather than always creating new ones"
+
+**✅ WHEN TO CREATE NEW:**
+- No existing entry addresses this topic
+- The entry is fundamentally different (e.g., new plan, different contemplation theme)
+- The user explicitly requests a new entry separate from an existing one
+- The information is time-sensitive and belongs in a new dated entry
+
+**Example Update Pattern:**
+```
+SEARCH: SELECT * FROM journals WHERE type='plan' AND content ILIKE '%trading%'
+RESULT: Found "Plan: Brazil projects and wealth" from March 1
+ACTION: UPDATE that plan with new trading hour details, not create new entry
+REASON: Both address same goal (wealth building), information is complementary
+```
+
+**Example Create Pattern:**
+```
+SEARCH: SELECT * FROM journals WHERE type='contemplation' AND content ILIKE '%love%'
+RESULT: Found "Brazil, sexuality, life direction" and "Love patterns with Philippe"
+SEARCH: No entry on "Daily sleep and schedule optimization"
+ACTION: Create new protocol for sleep/schedule since no relevant match exists
+```
 
