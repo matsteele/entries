@@ -209,8 +209,13 @@ function main() {
     const current = loadCurrent();
 
     const wasRoutine = current.task && current.task.sourceType === 'routine';
+    const isRest = current.task && (current.task.activityContext === 'rest' || current.task.title === 'sleeping' || current.task.title === 'resting');
 
-    if (current.task && !wasRoutine) {
+    if (isRest) {
+      // Never auto-pause sleep/rest tasks — user ends these manually
+      log(`Idle detected but skipping: rest context task "${current.task.title}"`);
+      saveHeartbeat({ lastHeartbeat: nowISO, lastAction: 'heartbeat' });
+    } else if (current.task && !wasRoutine) {
       // Pause novel/pending tasks immediately when idle detected
       const taskDesc = current.task.title === 'general'
         ? `${current.task.activityContext} (context)`
@@ -251,7 +256,9 @@ function main() {
     const current = loadCurrent();
 
     // If we were in idle with a routine task running, pause it now that user is back
-    if (heartbeat.lastAction === 'idle-detected-routine' && current.task && current.task.sourceType === 'routine') {
+    // But never auto-pause rest context tasks (sleeping/resting)
+    const isRestReturn = current.task && (current.task.activityContext === 'rest' || current.task.title === 'sleeping' || current.task.title === 'resting');
+    if (heartbeat.lastAction === 'idle-detected-routine' && current.task && current.task.sourceType === 'routine' && !isRestReturn) {
       const taskDesc = current.task.title === 'general'
         ? `${current.task.activityContext} (context)`
         : `"${current.task.title}"`;

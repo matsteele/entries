@@ -46,8 +46,44 @@ const VIEWS = [
 export default function Home() {
   const [open, setOpen] = useState(true);
   const [view, setView] = useState('focus');
+  const [viewParams, setViewParams] = useState({});
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+
+  // Sync view from URL params on mount and popstate
+  useEffect(() => {
+    setMounted(true);
+    const syncFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      const v = params.get('view');
+      if (v && VIEWS.some(vw => vw.key === v)) {
+        setView(v);
+        const p = {};
+        for (const [key, val] of params.entries()) {
+          if (key !== 'view') p[key] = val;
+        }
+        setViewParams(p);
+      }
+    };
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
+
+  // Update URL when view changes
+  const changeView = (v, params = {}) => {
+    setView(v);
+    setViewParams(params);
+    const url = new URL(window.location);
+    url.searchParams.set('view', v);
+    // Clear old params
+    for (const key of [...url.searchParams.keys()]) {
+      if (key !== 'view' && key !== 'date') url.searchParams.delete(key);
+    }
+    for (const [key, val] of Object.entries(params)) {
+      url.searchParams.set(key, val);
+    }
+    window.history.pushState({}, '', url);
+  };
 
   const drawerWidth = open ? DRAWER_WIDTH : DRAWER_COLLAPSED;
 
@@ -87,7 +123,7 @@ export default function Home() {
             <ListItemButton
               key={v.key}
               selected={view === v.key}
-              onClick={() => setView(v.key)}
+              onClick={() => changeView(v.key)}
               sx={{ px: open ? 2 : 1.5, justifyContent: open ? 'initial' : 'center' }}
             >
               <ListItemIcon sx={{ minWidth: open ? 36 : 'auto', justifyContent: 'center' }}>
@@ -103,8 +139,8 @@ export default function Home() {
         flexGrow: 1, p: 3, mt: 6,
         minWidth: 0,
       }}>
-        {view === 'focus'   && <FocusTimeline />}
-        {view === 'planning' && <PlanningView />}
+        {view === 'focus'   && <FocusTimeline onNavigate={changeView} />}
+        {view === 'planning' && <PlanningView initialGoalId={viewParams.goalId} />}
         {view === 'sleep'   && <SleepView />}
         {view === 'email'   && <EmailView />}
         {view === 'feeds'   && <FeedsView />}

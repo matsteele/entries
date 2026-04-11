@@ -16,6 +16,7 @@ import {
 } from '../hooks/useApi';
 import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
 import { ActiveTask, AddTaskForm, ContextGroup, CompletedStrip } from './TasksView';
+import DailyIntentions from './DailyIntentions';
 import WeeklyGoalsProgress from './WeeklyGoalsProgress';
 
 
@@ -925,7 +926,7 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
 }
 
 // ─── Main Export ─────────────────────────────────────────────────────────────
-export default function FocusTimeline() {
+export default function FocusTimeline({ onNavigate } = {}) {
   const [selectedDate, setSelectedDate] = useState(() => {
     if (typeof window !== 'undefined') { const p = new URLSearchParams(window.location.search).get('date'); return p || null; }
     return null;
@@ -1010,6 +1011,9 @@ export default function FocusTimeline() {
     <Box>
       {/* Current task — highlighted at the very top */}
       <ActiveTask task={currentTask} action={taskAction} pending={tasksData?.pending} routine={tasksData?.routine} />
+
+      {/* Daily intentions — write narrative, match goals */}
+      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
 
       {/* Weekly goal commitments and progress */}
       <WeeklyGoalsProgress />

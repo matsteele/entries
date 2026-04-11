@@ -120,20 +120,16 @@ function TreemapCell({ node, onClick, onSelect, isSelected, addedToday }) {
       }}
     >
       {/* Title row */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-        {ctx.emoji && <span style={{ fontSize: 14 }}>{ctx.emoji}</span>}
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, mb: 0.5 }}>
+        {ctx.emoji && <span style={{ fontSize: 14, flexShrink: 0 }}>{ctx.emoji}</span>}
         <Typography
           variant="body2"
           sx={{
             fontWeight: 600,
             fontSize: w < 120 ? 11 : 13,
-            lineHeight: 1.2,
+            lineHeight: 1.3,
             overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: h < 60 ? 'nowrap' : 'normal',
-            display: '-webkit-box',
-            WebkitLineClamp: h < 80 ? 1 : 2,
-            WebkitBoxOrient: 'vertical',
+            wordBreak: 'break-word',
           }}
         >
           {d.name}
@@ -536,7 +532,7 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
 
 // ─── Main PlanningView ──────────────────────────────────────────────────────
 
-export default function PlanningView() {
+export default function PlanningView({ initialGoalId } = {}) {
   const { data: treemapData, isLoading } = useGoalsTreemap();
 
   // Navigation state: stack of drill-down levels
@@ -581,6 +577,16 @@ export default function PlanningView() {
       });
     }
   }, [treemapData, findNodeInTree]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Navigate to initial goal if provided via URL param
+  useEffect(() => {
+    if (!initialGoalId || !treemapData) return;
+    const goal = findNodeInTree(treemapData, initialGoalId);
+    if (goal) {
+      setNavStack([{ data: goal, label: goal.name }]);
+      setSelectedNode(goal);
+    }
+  }, [initialGoalId, treemapData, findNodeInTree]);
 
   // Measure container with ResizeObserver
   useEffect(() => {

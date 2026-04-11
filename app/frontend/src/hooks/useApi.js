@@ -216,6 +216,30 @@ export function useUpdateSession() {
   });
 }
 
+// ─── Daily Intentions ─────────────────────────────────────────────────────
+
+export function useIntentions(date) {
+  return useQuery({
+    queryKey: ['intentions', date],
+    queryFn: () => fetchJson(`/api/intentions/${date}`),
+    enabled: !!date,
+    staleTime: 30000,
+  });
+}
+
+export function useSaveIntentions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ date, morning_intention, goal_allocations }) =>
+      fetch(`/api/intentions/${date}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ morning_intention, goal_allocations }),
+      }).then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; })),
+    onSuccess: (_, vars) => qc.invalidateQueries({ queryKey: ['intentions', vars.date] }),
+  });
+}
+
 // ─── Goals / Planning ──────────────────────────────────────────────────────
 
 export function useGoalsTreemap() {

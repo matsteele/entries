@@ -168,8 +168,13 @@ export function ActiveTask({ task, action, pending, routine }) {
             </Tooltip>
           )}
         </Stack>
+        {(task.goalTitle || task.projectTitle || task.epicTitle) && (
+          <Typography variant="caption" color="text.disabled" sx={{ mt: 0.75, display: 'block' }}>
+            {[task.goalTitle, task.projectTitle, task.epicTitle].filter(Boolean).join(' / ')}
+          </Typography>
+        )}
         {task.notes?.length > 0 && (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {task.notes[task.notes.length - 1]?.text ?? task.notes[task.notes.length - 1]}
           </Typography>
         )}
@@ -278,7 +283,14 @@ export function TaskRow({ task, action }) {
             <PlayArrowIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Tooltip>
-        <Typography variant="body2" sx={{ flexGrow: 1, lineHeight: 1.4 }}>{task.title}</Typography>
+        <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ lineHeight: 1.4 }}>{task.title}</Typography>
+          {(task.goalTitle || task.projectTitle || task.epicTitle) && (
+            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem' }}>
+              {[task.goalTitle, task.projectTitle, task.epicTitle].filter(Boolean).join(' / ')}
+            </Typography>
+          )}
+        </Box>
         {task.timeSpent ? (
           <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', whiteSpace: 'nowrap' }}>
             {formatMinutes(task.timeSpent)}
