@@ -85,7 +85,7 @@ function IntentionRow({ item, onNavigate, taskAction }) {
             height: 20,
             cursor: isLinkable ? 'pointer' : 'default',
             borderColor: cfg.color || '#555',
-            color: cfg.color || 'text.secondary',
+            color: 'rgba(255,255,255,0.85)',
             '&:hover': isLinkable ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
           }}
         />
