@@ -524,20 +524,45 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
 
       <Divider sx={{ mb: 2 }} />
 
-      {/* Narrative (projects only) */}
-      {isProject && narrative?.content && (
+      {/* Project documents */}
+      {isProject && (
         <Box sx={{ mb: 2 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Plan Narrative</Typography>
-          <Paper
-            variant="outlined"
-            sx={{
-              p: 1.5, maxHeight: 300, overflow: 'auto',
-              bgcolor: 'rgba(255,255,255,0.03)',
-              fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap',
-            }}
-          >
-            {narrative.content}
-          </Paper>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Documents</Typography>
+          <Stack spacing={0.5}>
+            {d.folder_path && (
+              <>
+                <Chip
+                  icon={<span style={{ fontSize: 11, marginLeft: 6 }}>📋</span>}
+                  label="ROADMAP.md"
+                  size="small"
+                  variant="outlined"
+                  component="a"
+                  href={`vscode://file${d.folder_path.replace('~', '/Users/matthewsteele')}/.plan/ROADMAP.md`}
+                  clickable
+                  sx={{ justifyContent: 'flex-start', fontSize: '0.7rem', height: 24 }}
+                />
+                <Chip
+                  icon={<span style={{ fontSize: 11, marginLeft: 6 }}>🏗️</span>}
+                  label="ARCHITECTURE.md"
+                  size="small"
+                  variant="outlined"
+                  component="a"
+                  href={`vscode://file${d.folder_path.replace('~', '/Users/matthewsteele')}/ARCHITECTURE.md`}
+                  clickable
+                  sx={{ justifyContent: 'flex-start', fontSize: '0.7rem', height: 24 }}
+                />
+              </>
+            )}
+          </Stack>
+          {/* Summary from narrative — first 2 lines only */}
+          {narrative?.content && (
+            <Typography variant="caption" sx={{
+              mt: 1, display: 'block', color: 'text.disabled', fontSize: 11,
+              lineHeight: 1.5, whiteSpace: 'pre-wrap',
+            }}>
+              {narrative.content.split('\n').filter(l => l.trim()).slice(0, 3).join('\n')}
+            </Typography>
+          )}
         </Box>
       )}
 
@@ -558,22 +583,17 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
         </Box>
       )}
 
-      {/* Add action (epics) */}
-      {isEpic && (
+      {/* Add action (epics and actions — add sibling when viewing an action) */}
+      {(isEpic || isAction) && (
         <Box sx={{ mb: 2 }}>
           <Box sx={{ display: 'flex', gap: 0.5 }}>
             <TextField
               size="small" placeholder="New action..." fullWidth
               value={newActionTitle} onChange={e => setNewActionTitle(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleAddAction(d.id)}
+              onKeyDown={e => e.key === 'Enter' && handleAddAction(isAction ? (d.epic_id || epicNav?.data?.id) : d.id)}
               sx={{ '& input': { fontSize: 13 } }}
             />
-            <TextField
-              size="small" placeholder="est. min" type="number"
-              value={newActionMinutes} onChange={e => setNewActionMinutes(e.target.value)}
-              sx={{ width: 70, '& input': { fontSize: 13 } }}
-            />
-            <IconButton size="small" onClick={() => handleAddAction(d.id)} disabled={!newActionTitle.trim()}>
+            <IconButton size="small" onClick={() => handleAddAction(isAction ? (d.epic_id || epicNav?.data?.id) : d.id)} disabled={!newActionTitle.trim()}>
               <AddIcon fontSize="small" />
             </IconButton>
           </Box>
@@ -600,8 +620,12 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
                 size="small"
                 fullWidth
                 startIcon={<CheckCircleIcon />}
-                disabled
-                sx={{ mb: 1, bgcolor: '#4CAF50 !important', color: '#fff !important', '&.Mui-disabled': { bgcolor: '#4CAF50 !important', color: '#fff !important' } }}
+                onClick={() => {
+                  taskAction.mutate({ action: 'delete-by-plan-id', actionId: d.id }, {
+                    onSuccess: () => setAddedToday(prev => { const next = new Set(prev); next.delete(d.id); return next; }),
+                  });
+                }}
+                sx={{ mb: 1, bgcolor: '#4CAF50', color: '#fff', '&:hover': { bgcolor: '#388E3C' } }}
               >
                 Added to Today
               </Button>
