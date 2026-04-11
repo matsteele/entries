@@ -287,9 +287,6 @@ function MealDrawer({ slot, slotData, meals, onSelect, onClose }) {
             <Button size="small" variant={currentStatus === 'planned' ? 'contained' : 'outlined'}
               sx={{ fontSize: '0.7rem' }}
               onClick={() => onSelect(currentMeal.id, 'planned')}>Plan</Button>
-            <Button size="small" variant={currentStatus === 'eating' ? 'contained' : 'outlined'} color="success"
-              sx={{ fontSize: '0.7rem' }}
-              onClick={() => onSelect(currentMeal.id, 'eating')}>Eating now</Button>
             <Button size="small" variant={currentStatus === 'eaten' ? 'contained' : 'outlined'} color="warning"
               sx={{ fontSize: '0.7rem' }}
               onClick={() => onSelect(currentMeal.id, 'eaten')}>Eaten ✓</Button>
@@ -1013,12 +1010,6 @@ export default function FocusTimeline({ onNavigate } = {}) {
       {/* Current task — highlighted at the very top */}
       <ActiveTask task={currentTask} action={taskAction} pending={tasksData?.pending} routine={tasksData?.routine} />
 
-      {/* Daily intentions — write narrative, match goals */}
-      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
-
-      {/* Weekly goal commitments and progress */}
-      <WeeklyGoalsProgress />
-
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Focus Timeline</Typography>
         <IconButton size="small" onClick={() => setSelectedDate(addDays(displayDate, -1))}><ChevronLeftIcon /></IconButton>
@@ -1078,6 +1069,12 @@ export default function FocusTimeline({ onNavigate } = {}) {
         currentQuality={sleepData?.lastNight?.quality}
         onSave={(date, quality) => saveQualityMutation.mutate({ date, quality })}
       />
+
+      {/* Daily intentions — write narrative, match goals */}
+      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
+
+      {/* Weekly goal progress + today's focused minutes */}
+      <WeeklyGoalsProgress />
 
       {/* Task management widgets */}
       <Box sx={{ mt: 2, maxWidth: 900 }}>
