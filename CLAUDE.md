@@ -305,6 +305,7 @@ For full command reference, context auto-detection keywords, routine vs novel ta
 - `/t rest` / `/t wake` - Sleep journaling (pre-sleep wind-down / post-sleep reflection)
 - `/t eeh` - Distraction journaling (quick check-in, does NOT pause current task)
 - `/t end [X-Y]` - Generate end-of-day update (date range optional)
+- `/t intentions "text"` - Morning intentions protocol (see below)
 
 **Important**: When in a filtered context, task numbers map to only that context's tasks.
 
@@ -563,6 +564,93 @@ See full protocol: `protocols/digesting-entries.md`
 5. **Provide analysis** - Offer insights appropriate to entry type
 6. **No duplicates** - Check existing before adding
 7. **Three distinct activities** - Daily tracking, logging/journaling, planning/backlog
+
+---
+
+## Morning Intentions Protocol (`/t intentions`)
+
+**Trigger:** `/t intentions "free-form text about what I want to focus on today"`
+
+This is an interactive, Claude-mediated workflow. The user writes their intentions in natural language. Claude interprets, aligns with existing goals/plans, and acts as an assistant to set up the day.
+
+### Step 1: Save & Interpret
+
+1. **Save the raw narrative** to `daily_intentions` via the API:
+   ```
+   PUT /api/intentions/YYYY-MM-DD
+   { "morning_intention": "<the text>" }
+   ```
+   The API auto-matches against active goals and returns `goal_allocations`.
+
+2. **Read context** — fetch in parallel:
+   - Active goals: `GET /api/goals` (titles, contexts, weekly targets)
+   - Weekly progress: `GET /api/goals/weekly-progress` (time spent vs targets)
+   - Current pending tasks: `node app/cli/statusline.js`
+   - Existing Google Tasks due today: the feed data
+   - Today's calendar events (to see time constraints)
+
+3. **Parse the narrative into an outline:**
+   - Extract concrete intentions (what the user wants to do)
+   - Map each to a goal if possible
+   - Identify any new themes not covered by existing goals
+
+### Step 2: Present Analysis
+
+Present a structured summary:
+
+```
+📋 Today's Intentions
+
+**Outline:**
+1. [Intention from narrative] → 🎯 [Matched Goal]
+2. [Intention from narrative] → 🎯 [Matched Goal]
+3. [Intention from narrative] → 🆕 Not tracked yet
+
+**Goal Alignment:**
+- 🎯 [Goal A]: X/Y focused mins this week (Z% of target) — today adds ~Nm
+- 🎯 [Goal B]: X/Y focused mins — today adds ~Nm
+- ⚠️ [Goal C]: No time planned today, Y mins behind target
+
+**Time Budget:**
+- Available hours today: ~Xh (based on calendar gaps)
+- Planned focus time: ~Yh
+- ⚠️ Over-committed by Zh / ✅ Fits within budget
+
+**Suggested Tasks:**
+- [ ] Task 1 (context, ~Xmin) — from [Goal A]
+- [ ] Task 2 (context, ~Xmin) — from [Goal B]
+- [ ] Task 3 (context, ~Xmin) — new
+
+**Potential Conflicts:**
+- [Flag if time exceeds available hours]
+- [Flag if key goals are neglected]
+- [Suggest time allotment changes if needed]
+```
+
+### Step 3: Interactive Refinement
+
+Ask the user:
+> "Should I add these tasks to your day? Anything to adjust?"
+
+Based on response:
+- **Add confirmed tasks** via `/t add "task" context` or `/t addS`
+- **Create novel tasks** in Google Tasks for non-today work
+- **Update goal weekly targets** if user agrees to changes
+- **Add actions to projects** if new work items are identified
+- **Pull existing Google Tasks** that align with today's intentions
+
+### Step 4: Finalize
+
+1. Update `daily_intentions.goal_allocations` with the final matched/suggested goals
+2. Show the final task list for the day
+3. Suggest which task to start with based on priority and calendar
+
+### Key Principles:
+- **Act as assistant, not executor** — present options, get confirmation before changes
+- **Respect existing structure** — match to goals/projects before creating new ones
+- **Time-aware** — factor in calendar events and weekly progress
+- **Concrete output** — every intention should result in at least one actionable task or a conscious decision to defer
+- **No silent changes** — always show what you're about to do before doing it
 
 ---
 
