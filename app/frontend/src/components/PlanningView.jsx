@@ -876,8 +876,8 @@ export default function PlanningView({ initialGoalId } = {}) {
         <Box
           ref={containerRef}
           sx={{
-            position: 'relative', mx: 2, mb: 1, overflow: 'hidden',
-            height: Math.min(600, Math.max(300, (currentData?.children?.length || 3) * 100)),
+            position: 'relative', mx: 2, mb: 1,
+            height: Math.min(600, Math.max(200, (currentData?.children?.length || 3) * 90)),
           }}
         >
           {leaves.map(leaf => (
