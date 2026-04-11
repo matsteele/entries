@@ -10,7 +10,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckIcon from '@mui/icons-material/Check';
-import DeleteIcon from '@mui/icons-material/Delete';
+import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
 import PauseIcon from '@mui/icons-material/Pause';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AddIcon from '@mui/icons-material/Add';
@@ -330,9 +330,9 @@ export function TaskRow({ task, action, onNavigate }) {
             <CheckIcon sx={{ fontSize: 16 }} />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Delete">
-          <IconButton size="small" color="error" onClick={() => action.mutate({ action: 'delete-task', taskId: task.id })} disabled={busy} sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}>
-            <DeleteIcon sx={{ fontSize: 14 }} />
+        <Tooltip title="Defer — remove from today">
+          <IconButton size="small" onClick={() => action.mutate({ action: 'delete-task', taskId: task.id })} disabled={busy} sx={{ opacity: 0.4, '&:hover': { opacity: 0.8, color: '#FF9800' } }}>
+            <RemoveCircleOutlineIcon sx={{ fontSize: 14 }} />
           </IconButton>
         </Tooltip>
       </Stack>
