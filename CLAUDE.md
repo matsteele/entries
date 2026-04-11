@@ -652,28 +652,26 @@ Ask the user what to act on. Based on response:
 
 ## Project Structure Convention
 
-Every project follows a standard file structure that maps to the Planning view hierarchy:
+Every project has a `.plan/` folder for planning artifacts:
 
 ```
 project-folder/
-├── .RM.md              # Roadmap — high-level features/epics, links to goal
-├── ARCHITECTURE.md     # What has been built — current system state
-├── docs/
-│   ├── epics/          # PRDs for specific epics (one per epic)
-│   │   ├── bot-platform.md
-│   │   ├── momentum-roadmap.md
-│   │   └── dashboard.md
-│   └── ...
+├── .plan/
+│   ├── ROADMAP.md       # Epics/features with status — basis for Planning view
+│   └── epics/           # PRDs for specific epics (one per epic)
+│       ├── bot-platform.md
+│       └── momentum-roadmap.md
+├── ARCHITECTURE.md      # What has been built — current system state
 └── ...
 ```
 
-**`.RM.md` (Roadmap):** Lists all epics/features with status (done/in-progress/planned). This is the basis for the Planning view's project → epics → actions hierarchy. Each epic links to its PRD file if one exists.
+**`.plan/ROADMAP.md`:** Lists all epics/features with status (done/in-progress/planned). This maps to the Planning view's project → epics → actions hierarchy. Each epic links to its PRD file if one exists.
 
-**`ARCHITECTURE.md`:** Documents what has been built — system state, tech stack, data flow. Reflects reality, not aspirations.
+**`.plan/epics/*.md` (PRDs):** Detailed requirements for specific epics. User stories, acceptance criteria, design decisions. Source of truth for actions within each epic.
 
-**`docs/epics/*.md` (PRDs):** Detailed requirements for specific epics. User stories, acceptance criteria, design decisions. These are the source of truth for actions within each epic.
+**`ARCHITECTURE.md` (project root):** Documents what has been built — system state, tech stack, data flow. Reflects reality, not aspirations.
 
-**Syncing with Planning view:** When starting work on a project, read `.RM.md` and relevant PRDs to sync the planning view's epics and actions. Mark completed work, add new actions from PRDs, remove stale items.
+**Syncing with Planning view:** When starting work on a project, read `.plan/ROADMAP.md` and relevant PRDs to sync the planning view's epics and actions. Mark completed work, add new actions from PRDs, remove stale items.
 
 ---
 
