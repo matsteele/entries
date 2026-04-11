@@ -573,84 +573,80 @@ See full protocol: `protocols/digesting-entries.md`
 
 This is an interactive, Claude-mediated workflow. The user writes their intentions in natural language. Claude interprets, aligns with existing goals/plans, and acts as an assistant to set up the day.
 
-### Step 1: Save & Interpret
+### Step 1: Save & Gather Context
 
 1. **Save the raw narrative** to `daily_intentions` via the API:
    ```
    PUT /api/intentions/YYYY-MM-DD
    { "morning_intention": "<the text>" }
    ```
-   The API auto-matches against active goals and returns `goal_allocations`.
 
-2. **Read context** — fetch in parallel:
-   - Active goals: `GET /api/goals` (titles, contexts, weekly targets)
+2. **Read the full planning structure** — fetch in parallel:
+   - Goals treemap: `GET /api/goals/treemap` (full hierarchy: goals → projects → epics → actions)
    - Weekly progress: `GET /api/goals/weekly-progress` (time spent vs targets)
+   - Routine tasks: read from `tracking/routine.json`
    - Current pending tasks: `node app/cli/statusline.js`
-   - Existing Google Tasks due today: the feed data
    - Today's calendar events (to see time constraints)
 
-3. **Parse the narrative into an outline:**
-   - Extract concrete intentions (what the user wants to do)
-   - Map each to a goal if possible
-   - Identify any new themes not covered by existing goals
+### Step 2: Semantic Matching
 
-### Step 2: Present Analysis
+Parse the narrative into an outline. For each intention, **semantically match** against the full hierarchy:
 
-Present a structured summary:
+- **Routine tasks** — "eat cleaner" → eating routine, "fix sleep schedule" → sleeping routine, "supplements" → supplements routine
+- **Goals** — "trading app" → Achieve Financial Independence, "life organized" → Live an Optimized Life
+- **Projects** — "time tracking app" → Life Planning System Architecture, "trading app" → Financial Analysis AI / Trading System
+- **Epics/Actions** — match to specific epics or actions within projects if the intention is specific enough
+
+**Matching priority:** action > epic > project > goal > routine task. Most specific match wins.
+
+### Step 3: Present Outline
+
+Present each intention with its match and available actions:
 
 ```
 📋 Today's Intentions
 
-**Outline:**
-1. [Intention from narrative] → 🎯 [Matched Goal]
-2. [Intention from narrative] → 🎯 [Matched Goal]
-3. [Intention from narrative] → 🆕 Not tracked yet
+1. Eat cleaner → 🔄 eating (routine) — [switch]
+2. Fix sleep schedule → 🔄 sleeping (routine) — general intention, no action needed
+3. Work on time tracking app → 🚀 Life Planning System / [specific epic] — [add to docket] [start]
+4. Work on trading app → 🚀 Financial Analysis AI / Trading System — [add to docket] [start]
+5. Help Phellipe with taxes → no match — [add as novel task?]
+6. Reflect/digest notes → 🔄 journaling (routine) — [switch]
+7. Supplements for back → 🔄 supplements (routine) — general intention, no action needed
 
 **Goal Alignment:**
-- 🎯 [Goal A]: X/Y focused mins this week (Z% of target) — today adds ~Nm
-- 🎯 [Goal B]: X/Y focused mins — today adds ~Nm
-- ⚠️ [Goal C]: No time planned today, Y mins behind target
-
-**Time Budget:**
-- Available hours today: ~Xh (based on calendar gaps)
-- Planned focus time: ~Yh
-- ⚠️ Over-committed by Zh / ✅ Fits within budget
-
-**Suggested Tasks:**
-- [ ] Task 1 (context, ~Xmin) — from [Goal A]
-- [ ] Task 2 (context, ~Xmin) — from [Goal B]
-- [ ] Task 3 (context, ~Xmin) — new
-
-**Potential Conflicts:**
-- [Flag if time exceeds available hours]
-- [Flag if key goals are neglected]
-- [Suggest time allotment changes if needed]
+- 🎯 Achieve Financial Independence: X/Y focused mins this week
+- 🎯 Live an Optimized Life: X/Y focused mins this week
+- ⚠️ [Goal with no time planned but behind target]
 ```
 
-### Step 3: Interactive Refinement
+**Match types and actions:**
+- **Routine task** → can switch to it (`/t ? taskname`), but does NOT add to docket (routine tasks are always there)
+- **Action/Epic** → can add to today's docket or start immediately
+- **Project/Goal** → reference link only (user decides which epic/action to work on)
+- **No match** → ask if user wants to add as a novel task, or suggest where it fits in the hierarchy
 
-Ask the user:
-> "Should I add these tasks to your day? Anything to adjust?"
+### Step 4: Interactive Refinement
 
-Based on response:
-- **Add confirmed tasks** via `/t add "task" context` or `/t addS`
-- **Create novel tasks** in Google Tasks for non-today work
-- **Update goal weekly targets** if user agrees to changes
-- **Add actions to projects** if new work items are identified
-- **Pull existing Google Tasks** that align with today's intentions
+Ask the user what to act on. Based on response:
+- **Switch to routine** — `/t ? taskname`
+- **Add action/epic to docket** — `/t add "title" context`
+- **Start action/epic** — `/t addS "title" context`
+- **Add novel task** — only for things that genuinely don't exist anywhere
+- **Update goals/allotments** — if user agrees
 
-### Step 4: Finalize
+### Step 5: Finalize
 
-1. Update `daily_intentions.goal_allocations` with the final matched/suggested goals
-2. Show the final task list for the day
-3. Suggest which task to start with based on priority and calendar
+1. Save the resolved outline to `daily_intentions.goal_allocations`
+2. Show what was added/started
+3. Suggest what to start with based on priority and calendar
 
 ### Key Principles:
-- **Act as assistant, not executor** — present options, get confirmation before changes
-- **Respect existing structure** — match to goals/projects before creating new ones
-- **Time-aware** — factor in calendar events and weekly progress
-- **Concrete output** — every intention should result in at least one actionable task or a conscious decision to defer
-- **No silent changes** — always show what you're about to do before doing it
+- **Interpret, don't create** — match to existing structure before creating anything new
+- **Routine ≠ novel** — routine tasks are ambient; don't add them to the docket
+- **Semantic over keyword** — Claude understands "eat cleaner" matches "eating" and "fix sleep" matches "sleeping"
+- **Actions from hierarchy** — pull actionable work from existing epics/actions, not from the narrative
+- **No silent changes** — always present what you found and ask before acting
 
 ---
 
