@@ -15,7 +15,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import * as d3Hierarchy from 'd3-hierarchy';
-import { CONTEXT_CONFIG } from '../lib/contexts';
+import { CONTEXT_CONFIG, TYPE_ICONS } from '../lib/contexts';
 import {
   useGoalsTreemap, useProjectNarrative, useUpdateGoal, useUpdateProject,
   useUpdateEpic, useUpdateAction, useCreateEpic, useCreateAction, useTaskAction,
@@ -245,6 +245,7 @@ function TreemapCell({ node, onClick, onSelect, isSelected, addedToday }) {
     >
       {/* Title row */}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, mb: 0.5 }}>
+        <span style={{ fontSize: 11, flexShrink: 0, opacity: 0.6 }}>{TYPE_ICONS[d.type] || ''}</span>
         {ctx.emoji && <span style={{ fontSize: 14, flexShrink: 0 }}>{ctx.emoji}</span>}
         <Typography
           variant="body2"
@@ -445,6 +446,7 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
       {/* Header */}
       <Box sx={{ mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <span style={{ fontSize: 14, opacity: 0.5 }}>{TYPE_ICONS[d.type] || ''}</span>
           {ctx.emoji && <span style={{ fontSize: 20 }}>{ctx.emoji}</span>}
           <Typography variant="h6" sx={{ fontSize: 16, fontWeight: 700 }}>
             {d.name}
@@ -567,7 +569,7 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
               sx={{ '& input': { fontSize: 13 } }}
             />
             <TextField
-              size="small" placeholder="min" type="number"
+              size="small" placeholder="est. min" type="number"
               value={newActionMinutes} onChange={e => setNewActionMinutes(e.target.value)}
               sx={{ width: 70, '& input': { fontSize: 13 } }}
             />
@@ -781,8 +783,9 @@ export default function PlanningView({ initialGoalId } = {}) {
   const handleCellClick = (node) => {
     // Always select for side panel
     setSelectedNode(node);
-    // If it has children, also drill down
-    if (node.children && node.children.length > 0) {
+    // Drill down if node can have children (goals, projects, epics) — even if currently empty
+    const drillableTypes = ['goal', 'project', 'epic'];
+    if (drillableTypes.includes(node.type)) {
       setNavStack(prev => [...prev, { data: node, label: node.name }]);
     }
   };

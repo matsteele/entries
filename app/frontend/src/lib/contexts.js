@@ -20,3 +20,21 @@ export function formatMinutes(mins) {
   if (m === 0) return `${h}h`;
   return `${h}h ${m}m`;
 }
+
+// Planning hierarchy type icons
+export const TYPE_ICONS = {
+  goal: '◎',
+  project: '▣',
+  epic: '◈',
+  action: '▸',
+  routine: '↻',
+};
+
+export function formatFocusedMinutes(mins) {
+  if (!mins || mins < 1) return '0fm';
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  if (h === 0) return `${m}fm`;
+  if (m === 0) return `${h}fh`;
+  return `${h}fh ${m}fm`;
+}

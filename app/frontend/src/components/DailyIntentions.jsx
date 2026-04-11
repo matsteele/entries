@@ -10,108 +10,91 @@ import SaveIcon from '@mui/icons-material/Save';
 import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AddIcon from '@mui/icons-material/Add';
-import LinkIcon from '@mui/icons-material/Link';
 import { useIntentions, useSaveIntentions, useTaskAction } from '../hooks/useApi';
-import { CONTEXT_CONFIG } from '../lib/contexts';
-
-const MATCH_ICONS = {
-  routine: '🔄',
-  goal: '🎯',
-  project: '🚀',
-  epic: '📦',
-  action: '⚡',
-  none: '❌',
-};
+import { CONTEXT_CONFIG, TYPE_ICONS } from '../lib/contexts';
 
 function IntentionRow({ item, onNavigate, taskAction }) {
   const cfg = CONTEXT_CONFIG[item.matchContext] || {};
-  const icon = MATCH_ICONS[item.matchType] || '•';
+  const typeIcon = TYPE_ICONS[item.matchType] || '•';
   const actions = item.actions || [];
   const busy = taskAction?.isPending;
-
-  const handleSwitch = () => {
-    if (item.routineTitle) {
-      // Use the CLI fuzzy search to switch to routine task
-      taskAction?.mutate({ action: 'switch-to-search', query: item.routineTitle });
-    }
-  };
-
-  const handleAdd = () => {
-    const ctx = Object.entries(CONTEXT_CONFIG).find(([, v]) => v.label?.toLowerCase() === item.matchContext)?.[1]?.code
-      || item.matchContext || 'proj';
-    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: ctx });
-  };
-
-  const handleStart = () => {
-    const ctx = Object.entries(CONTEXT_CONFIG).find(([, v]) => v.label?.toLowerCase() === item.matchContext)?.[1]?.code
-      || item.matchContext || 'proj';
-    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: ctx });
-  };
 
   const handleLink = () => {
     const id = item.goalId || item.matchId;
     if (id && onNavigate) onNavigate('planning', { goalId: id });
   };
 
+  const handleAdd = () => {
+    const ctx = cfg.code || item.matchContext || 'proj';
+    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: ctx });
+  };
+
+  const isLinkable = item.matchId || item.goalId;
+
   return (
-    <Box sx={{
-      display: 'flex', alignItems: 'center', gap: 1, py: 0.75,
-      borderBottom: '1px solid rgba(255,255,255,0.04)',
-    }}>
-      <Typography sx={{ fontSize: 14, flexShrink: 0 }}>{icon}</Typography>
-      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+    <Box sx={{ py: 0.6, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <Stack direction="row" alignItems="center" spacing={0.75}>
+        {/* Intention text */}
         <Typography variant="body2" sx={{ fontSize: 12, lineHeight: 1.3 }}>
           {item.intention}
         </Typography>
-        {item.matchTitle && (
-          <Typography variant="caption" sx={{ color: cfg.color || 'text.disabled', fontSize: 10 }}>
-            {cfg.emoji} {item.matchTitle}
-            {item.note && <span style={{ color: '#888' }}> — {item.note}</span>}
-          </Typography>
-        )}
-        {item.matchType === 'none' && (
-          <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10 }}>
-            no match in hierarchy
-          </Typography>
-        )}
-      </Box>
-      <Stack direction="row" spacing={0.25} sx={{ flexShrink: 0 }}>
+
+        {/* Action buttons — right next to text */}
         {actions.includes('switch') && (
-          <Tooltip title="Switch to this routine task">
-            <IconButton size="small" onClick={handleSwitch} disabled={busy}>
-              <PlayArrowIcon sx={{ fontSize: 14 }} />
+          <Tooltip title="Switch to">
+            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy}
+              onClick={() => taskAction?.mutate({ action: 'switch-to-search', query: item.routineTitle })}>
+              <PlayArrowIcon sx={{ fontSize: 13, color: '#4CAF50' }} />
             </IconButton>
           </Tooltip>
         )}
         {actions.includes('add') && (
-          <Tooltip title="Add to today's docket">
-            <IconButton size="small" onClick={handleAdd} disabled={busy}>
-              <AddIcon sx={{ fontSize: 14 }} />
+          <Tooltip title="Add to docket">
+            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
+              <AddIcon sx={{ fontSize: 13 }} />
             </IconButton>
           </Tooltip>
         )}
         {actions.includes('start') && (
-          <Tooltip title="Add and start now">
-            <IconButton size="small" onClick={handleStart} disabled={busy} sx={{ color: '#4CAF50' }}>
-              <PlayArrowIcon sx={{ fontSize: 14 }} />
+          <Tooltip title="Start now">
+            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
+              <PlayArrowIcon sx={{ fontSize: 13, color: '#4CAF50' }} />
             </IconButton>
           </Tooltip>
         )}
         {actions.includes('add-novel') && (
           <Tooltip title="Add as novel task">
-            <IconButton size="small" onClick={handleAdd} disabled={busy}>
-              <AddIcon sx={{ fontSize: 14 }} />
-            </IconButton>
-          </Tooltip>
-        )}
-        {(actions.includes('link') || item.matchId || item.goalId) && (
-          <Tooltip title="View in Planning">
-            <IconButton size="small" onClick={handleLink}>
-              <LinkIcon sx={{ fontSize: 14 }} />
+            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
+              <AddIcon sx={{ fontSize: 13 }} />
             </IconButton>
           </Tooltip>
         )}
       </Stack>
+
+      {/* Match tag — clickable chip below intention */}
+      {item.matchTitle && (
+        <Chip
+          icon={<span style={{ fontSize: 11, marginLeft: 6 }}>{typeIcon}</span>}
+          label={`${cfg.emoji || ''} ${item.matchTitle}${item.note ? ` — ${item.note}` : ''}`}
+          size="small"
+          variant="outlined"
+          onClick={isLinkable ? handleLink : undefined}
+          sx={{
+            mt: 0.25,
+            fontSize: '0.65rem',
+            height: 20,
+            cursor: isLinkable ? 'pointer' : 'default',
+            borderColor: cfg.color || '#555',
+            color: cfg.color || 'text.secondary',
+            '&:hover': isLinkable ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
+          }}
+        />
+      )}
+      {item.matchType === 'none' && (
+        <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10, ml: 0.5 }}>
+          no match in hierarchy
+        </Typography>
+      )}
     </Box>
   );
 }
@@ -235,35 +218,25 @@ export default function DailyIntentions({ date, onNavigate }) {
               {outline.length > 0 && (
                 <Box sx={{ mt: 1 }}>
                   {outline.map((item, i) => (
-                    <IntentionRow
-                      key={i}
-                      item={item}
-                      onNavigate={onNavigate}
-                      taskAction={taskAction}
-                    />
+                    <IntentionRow key={i} item={item} onNavigate={onNavigate} taskAction={taskAction} />
                   ))}
                 </Box>
               )}
 
-              {/* Legacy: old-format matched goals (backwards compat) */}
+              {/* Legacy format backwards compat */}
               {!outline.length && allocations?.matched?.length > 0 && (
-                <Box sx={{ mt: 1 }}>
-                  <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                    {allocations.matched.map((g, i) => {
-                      const cfg = CONTEXT_CONFIG[g.context] || {};
-                      return (
-                        <Chip
-                          key={g.goalId || i}
-                          label={`${cfg.emoji || '🎯'} ${g.title}`}
-                          size="small"
-                          variant="outlined"
-                          onClick={() => onNavigate?.('planning', { goalId: g.goalId })}
-                          sx={{ fontSize: '0.7rem', cursor: 'pointer', borderColor: cfg.color || '#666' }}
-                        />
-                      );
-                    })}
-                  </Stack>
-                </Box>
+                <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
+                  {allocations.matched.map((g, i) => {
+                    const cfg = CONTEXT_CONFIG[g.context] || {};
+                    return (
+                      <Chip key={g.goalId || i}
+                        label={`${cfg.emoji || '🎯'} ${g.title}`} size="small" variant="outlined"
+                        onClick={() => onNavigate?.('planning', { goalId: g.goalId })}
+                        sx={{ fontSize: '0.7rem', cursor: 'pointer', borderColor: cfg.color || '#666' }}
+                      />
+                    );
+                  })}
+                </Stack>
               )}
             </Box>
           )}
