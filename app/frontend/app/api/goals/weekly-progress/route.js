@@ -33,10 +33,10 @@ export async function GET() {
       `SELECT id, title, goal_id, weekly_target_minutes, context FROM plans WHERE status = 'active' ORDER BY weight DESC`
     );
 
-    // Get actual minutes per goal this week from task_sessions
+    // Get focused minutes per goal this week (minutes × focus_level)
     const goalActualRes = await pool.query(
       `SELECT goal_id,
-              COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60), 0)::int as minutes
+              COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60 * COALESCE(focus_level, 1)), 0)::int as focused_minutes
        FROM task_sessions
        WHERE goal_id IS NOT NULL
          AND started_at >= $1
@@ -44,10 +44,10 @@ export async function GET() {
       [mondayISO]
     );
 
-    // Get actual minutes per project this week
+    // Get focused minutes per project this week (minutes × focus_level)
     const projectActualRes = await pool.query(
       `SELECT project_id,
-              COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60), 0)::int as minutes
+              COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60 * COALESCE(focus_level, 1)), 0)::int as focused_minutes
        FROM task_sessions
        WHERE project_id IS NOT NULL
          AND started_at >= $1
@@ -55,11 +55,11 @@ export async function GET() {
       [mondayISO]
     );
 
-    // Index actuals
+    // Index actuals (focused minutes)
     const goalActuals = {};
-    for (const r of goalActualRes.rows) goalActuals[r.goal_id] = r.minutes;
+    for (const r of goalActualRes.rows) goalActuals[r.goal_id] = r.focused_minutes;
     const projectActuals = {};
-    for (const r of projectActualRes.rows) projectActuals[r.project_id] = r.minutes;
+    for (const r of projectActualRes.rows) projectActuals[r.project_id] = r.focused_minutes;
 
     // Build response
     const goals = goalsRes.rows.map(g => {

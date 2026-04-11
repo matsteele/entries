@@ -7,7 +7,7 @@ import {
   ComposedChart, Bar, Line, Legend,
 } from 'recharts';
 import { useTimeSums, useTimeHistory } from '../hooks/useApi';
-import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
+import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes, formatFocusedMinutes } from '../lib/contexts';
 
 function ContextBar({ label, minutes, total, color }) {
   const pct = total > 0 ? (minutes / total) * 100 : 0;
@@ -117,14 +117,14 @@ function HistoryChart({ period }) {
             <YAxis tickFormatter={(v) => `${Math.round(v / 60)}h`} tick={{ fontSize: 11 }} />
             <Tooltip
               formatter={(v, name) => {
-                if (name === 'Focused') return formatMinutes(Math.round(v));
+                if (name === 'Focused') return formatFocusedMinutes(Math.round(v));
                 const cfg = Object.values(CONTEXT_CONFIG).find(c => c.code === name);
                 return [formatMinutes(Math.round(v)), cfg?.label || name];
               }}
               labelFormatter={formatLabel}
             />
             <Legend formatter={(v) => {
-              if (v === 'Focused') return 'Focused mins';
+              if (v === 'Focused') return 'Focused (fm)';
               const cfg = Object.values(CONTEXT_CONFIG).find(c => c.code === v);
               return cfg ? `${cfg.emoji} ${cfg.label}` : v;
             }} />

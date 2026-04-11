@@ -11,13 +11,9 @@ function GoalRow({ goal }) {
   const pct = target > 0 ? Math.min(100, Math.round((actual / target) * 100)) : 0;
   const hasTarget = target > 0;
 
-  const fmtMin = (m) => {
-    if (!m) return '0m';
-    const h = Math.floor(m / 60);
-    const mins = m % 60;
-    if (h === 0) return `${mins}m`;
-    if (mins === 0) return `${h}h`;
-    return `${h}h${mins}m`;
+  const fmtFm = (m) => {
+    if (!m) return '0fm';
+    return `${m}fm`;
   };
 
   // Projects with targets
@@ -34,7 +30,7 @@ function GoalRow({ goal }) {
         </Typography>
         {hasTarget && (
           <Typography variant="caption" sx={{ fontSize: 11, color: pct >= 100 ? '#4CAF50' : 'text.secondary', fontFamily: 'monospace' }}>
-            {fmtMin(actual)}/{fmtMin(target)}
+            {fmtFm(actual)}/{fmtFm(target)}
           </Typography>
         )}
       </Box>
@@ -62,7 +58,7 @@ function GoalRow({ goal }) {
                 {p.title}
               </Typography>
               <Typography variant="caption" sx={{ fontSize: 10, color: 'text.secondary', fontFamily: 'monospace' }}>
-                {fmtMin(p.actual_minutes)}/{fmtMin(p.weekly_target_minutes)}
+                {fmtFm(p.actual_minutes)}/{fmtFm(p.weekly_target_minutes)}
               </Typography>
             </Box>
             <LinearProgress

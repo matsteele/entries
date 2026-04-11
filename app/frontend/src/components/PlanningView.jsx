@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Box, Typography, Breadcrumbs, Link, Chip, IconButton, Slider,
+  Box, Typography, Breadcrumbs, Link, Chip, IconButton, Slider, Stack,
   Divider, TextField, Button, Select, MenuItem, FormControl,
   InputLabel, LinearProgress, Tooltip, Paper,
 } from '@mui/material';

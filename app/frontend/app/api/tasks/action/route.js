@@ -147,6 +147,20 @@ export async function POST(request) {
         }
         break;
       }
+      case 'delete-by-plan-id': {
+        if (!params.actionId) return NextResponse.json({ error: 'actionId required' }, { status: 400 });
+        try {
+          const pending = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8'));
+          const idx = pending.findIndex(t => t.actionId === params.actionId);
+          if (idx >= 0) {
+            const taskId = pending[idx].id;
+            output = runCli('delete-task-id', taskId);
+          } else {
+            output = 'Task not found in pending';
+          }
+        } catch (e) { output = e.message; }
+        break;
+      }
       case 'add-from-plan': {
         if (!params.title) return NextResponse.json({ error: 'title required' }, { status: 400 });
         const planTaskStr = params.context ? `${params.title} ${params.context}` : params.title;

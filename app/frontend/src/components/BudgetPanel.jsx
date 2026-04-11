@@ -9,7 +9,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTimeBudget, useUpdateConfig } from '../hooks/useApi';
-import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
+import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes, formatFocusedMinutes } from '../lib/contexts';
 
 const CTX_CODE_TO_NAME = {
   cul: 'cultivo', prof: 'professional', per: 'personal',
@@ -86,7 +86,7 @@ function ContextBudgetRow({ code, cfg, minutesToday, target, focusedMins, onSave
         />
         {focusedMins > 0 && (
           <Chip
-            label={`${formatMinutes(focusedMins)} focused`}
+            label={`${formatFocusedMinutes(focusedMins)} focused`}
             size="small"
             variant="outlined"
             sx={{ fontSize: '0.65rem', color: cfg.color, borderColor: cfg.color }}
@@ -133,7 +133,7 @@ export default function BudgetPanel() {
         <Typography variant="h6">Weekly Context Budgets</Typography>
         <Chip label={`${formatMinutes(totalMinutesToday)} this week`} size="small" color="primary" />
         {focusedMins > 0 && (
-          <Chip label={`${formatMinutes(focusedMins)} focused`} size="small" color="secondary" />
+          <Chip label={`${formatFocusedMinutes(focusedMins)} focused`} size="small" color="secondary" />
         )}
       </Stack>
 
