@@ -162,6 +162,11 @@ function getViewTasks(current) {
  * functions work correctly, and returns a cleanup function to restore state.
  */
 function prepareByIdContext(taskId) {
+  // Check if it's the current task
+  const current = loadCurrent();
+  if (current.task && (current.task.id === taskId || current.task.sourceId === taskId)) {
+    return { number: 0, viewMode: current.viewMode || 'novel' };
+  }
   const pendingOrdered = getDisplayOrderedTasks(loadPending(), null);
   let idx = pendingOrdered.findIndex(t => t.id === taskId);
   if (idx !== -1) {
@@ -1543,6 +1548,64 @@ function reassignUnstructuredTime(taskNumber) {
   console.log(`   (from ${new Date(blockStart).toLocaleTimeString()} to now)\n`);
 }
 
+// ─── Fill unstructured time ─────────────────────────────────────────────────
+
+function fillUnstructured() {
+  const current = loadCurrent();
+  const now = new Date();
+  const timestamp = now.toISOString();
+
+  if (current.task) {
+    console.error('\n❌ /t fill only works when no task is active (blank state after idle/pause).\n');
+    process.exit(1);
+  }
+
+  // Find the most recent session end time
+  const todaySessions = getTodaySessions();
+  const completedSessions = todaySessions
+    .filter(s => s.session.endedAt && s.sourceFile !== 'current')
+    .sort((a, b) => new Date(b.session.endedAt) - new Date(a.session.endedAt));
+
+  if (completedSessions.length === 0) {
+    console.error('\n❌ No completed sessions found today. Cannot determine fill start time.\n');
+    process.exit(1);
+  }
+
+  const blockStart = completedSessions[0].session.endedAt;
+  const elapsedMinutes = calculateElapsedMinutesUntil(blockStart, now);
+
+  if (elapsedMinutes < 1) {
+    console.log('\n✅ No gap to fill (last session ended less than a minute ago).\n');
+    return;
+  }
+
+  // Find or create the unstructured routine task
+  const routine = loadRoutine();
+  let usTask = routine.find(t => t.activityContext === 'unstructured' || t.activityContext === 'us');
+  if (!usTask) {
+    usTask = ensureRoutineTask('unstructured', 'unstructured');
+  }
+
+  const session = { startedAt: blockStart, endedAt: timestamp };
+
+  // Persist session to Postgres
+  writeSessionToDB(usTask, session);
+
+  // Add session + time to the unstructured task
+  updateTaskInFile(usTask.id, (t) => {
+    t.timeSpent = (t.timeSpent || 0) + elapsedMinutes;
+    if (!t.sessions) t.sessions = [];
+    t.sessions.push(session);
+  });
+
+  current.contextSums = calculateContextSums();
+  saveCurrent(current);
+
+  const timeStr = formatTimeSpent(elapsedMinutes);
+  console.log(`\n☀️ Filled ${timeStr} as unstructured time`);
+  console.log(`   (from ${new Date(blockStart).toLocaleTimeString()} to now)\n`);
+}
+
 // ─── Set last task end time ─────────────────────────────────────────────────
 
 function setLastTaskEndTime(timeStr) {
@@ -2667,539 +2730,6 @@ function pullGoogleTasks() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// REST PROGRAM - Sleep Tracking
-// ═══════════════════════════════════════════════════════════════
-
-const SLEEP_DIR = path.join(BASE_DIR, 'tracking', 'sleep');
-const STRATEGIES_FILE = path.join(SLEEP_DIR, 'strategies.json');
-
-function loadStrategies() {
-  if (fs.existsSync(STRATEGIES_FILE)) {
-    return JSON.parse(fs.readFileSync(STRATEGIES_FILE, 'utf8')).strategies;
-  }
-  return [];
-}
-
-function loadSleepLog(date = TODAY) {
-  const filePath = path.join(SLEEP_DIR, `sleep-log-${date}.json`);
-  if (fs.existsSync(filePath)) {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  }
-  return null;
-}
-
-function saveSleepLog(sleepData) {
-  if (!fs.existsSync(SLEEP_DIR)) {
-    fs.mkdirSync(SLEEP_DIR, { recursive: true });
-  }
-  const filePath = path.join(SLEEP_DIR, `sleep-log-${sleepData.date}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(sleepData, null, 2), 'utf8');
-}
-
-function displayBedtimeProtocol() {
-  console.log('\n🌙 Bedtime Protocol');
-  console.log('────────────────────');
-  console.log('  ☐ Phone at door/desk (Home is Sacred)');
-  console.log('  ☐ No screens in bed');
-  console.log('  ☐ Room dark & cool');
-  console.log('  ☐ Meditation / breathing');
-  console.log('  ☐ Gratitude reflection');
-  console.log('  ☐ Supplements if planned');
-}
-
-function displayMorningProtocol() {
-  console.log('\n🌅 Morning Protocol');
-  console.log('────────────────────');
-  console.log('  ☐ Hydrate (glass of water)');
-  console.log('  ☐ Morning writing (5-min stream of consciousness)');
-  console.log('  ☐ Plan the day');
-  console.log('  ☐ Leave home');
-}
-
-function displayStrategies(strategies, selectedIds = []) {
-  const selectedSet = new Set(selectedIds);
-  strategies.forEach(s => {
-    const check = selectedSet.has(s.id) ? ' ✓' : '';
-    const pad = s.id < 10 ? ' ' : '';
-    console.log(`  ${pad}${s.id}. ${s.name}${check}`);
-  });
-}
-
-function parseStrategyInput(input, strategies) {
-  if (!input || input.trim() === '') return [];
-  const ids = input.split(',')
-    .map(s => parseInt(s.trim()))
-    .filter(n => !isNaN(n) && strategies.some(s => s.id === n));
-  return [...new Set(ids)];
-}
-
-// Non-interactive rest/wake for Claude Code journaling sessions
-function restLogNonInteractive() {
-  const current = loadCurrent();
-  const now = new Date();
-  const timestamp = now.toISOString();
-
-  // If already sleeping, just confirm
-  if (current.task && current.task.title === 'sleeping') {
-    console.log('😴 Already in rest mode.');
-    console.log(JSON.stringify({ status: 'already_resting', restStarted: current.task.startedAt }));
-    return;
-  }
-
-  // End current session
-  if (current.task) {
-    const endResult = endCurrentSession(current, now);
-    if (endResult && current.task.sourceType === 'pending') {
-      const pending = loadPending();
-      upsertPending(pending, endResult.taskData);
-      savePending(pending);
-    }
-    const emoji = CONTEXT_EMOJI_MAP[current.task.activityContext] || '💼';
-    const timeStr = formatTimeSpent(endResult ? endResult.totalTimeSpent : 0);
-    console.log(`⏸️  Paused: ${emoji} ${current.task.title} (${timeStr})`);
-  }
-
-  // Find or create sleeping routine task
-  const routine = loadRoutine();
-  let sleepTask = routine.find(t => t.title === 'sleeping' && t.routine);
-
-  if (!sleepTask) {
-    sleepTask = {
-      id: generateId(),
-      title: 'sleeping',
-      activityContext: 'health',
-      category: 'General',
-      timeSpent: 0,
-      sessions: [],
-      notes: [],
-      routine: true
-    };
-    routine.push(sleepTask);
-    saveRoutine(routine);
-  }
-
-  current.task = {
-    title: 'sleeping',
-    activityContext: 'health',
-    startedAt: timestamp,
-    timeSpent: sleepTask.timeSpent || 0,
-    sourceType: 'routine',
-    sourceId: sleepTask.id,
-    notes: [],
-    sessions: sleepTask.sessions || []
-  };
-  current.contextFilter = 'health';
-  current.contextSums = calculateContextSums();
-  saveCurrent(current);
-
-  // Create sleep log (without strategies — Claude journaling handles that)
-  const sleepLog = {
-    date: TODAY,
-    restStarted: timestamp,
-    wakeTime: null,
-    durationMinutes: null,
-    quality: null,
-    notes: null,
-    strategies: { planned: [], actual: [] },
-    strategiesUsed: [],
-    medicationUsed: false,
-    supplementsUsed: []
-  };
-  saveSleepLog(sleepLog);
-
-  console.log(`😴 Rest mode started at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-  console.log(JSON.stringify({ status: 'rest_started', restStarted: timestamp, date: TODAY }));
-}
-
-function wakeLogNonInteractive() {
-  const current = loadCurrent();
-  const wakeTime = new Date();
-  const wakeTimestamp = wakeTime.toISOString();
-
-  // Find sleep log from today or yesterday
-  let sleepLog = loadSleepLog(TODAY);
-  if (!sleepLog) {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = getLocalDate(yesterday);
-    sleepLog = loadSleepLog(yStr);
-  }
-
-  if (!sleepLog || !sleepLog.restStarted) {
-    sleepLog = {
-      date: TODAY, restStarted: null, wakeTime: wakeTimestamp,
-      durationMinutes: null, quality: null, notes: null,
-      strategies: { planned: [], actual: [] },
-      strategiesUsed: [], medicationUsed: false, supplementsUsed: []
-    };
-  }
-
-  let durationMinutes = null;
-  if (sleepLog.restStarted) {
-    durationMinutes = Math.round((wakeTime - new Date(sleepLog.restStarted)) / 60000);
-  }
-
-  sleepLog.wakeTime = wakeTimestamp;
-  sleepLog.durationMinutes = durationMinutes;
-  saveSleepLog(sleepLog);
-
-  // End sleeping session
-  if (current.task && current.task.title === 'sleeping') {
-    endCurrentSession(current, wakeTime);
-    current.task = null;
-    current.contextFilter = null;
-    current.contextSums = calculateContextSums();
-    saveCurrent(current);
-  }
-
-  const durationStr = durationMinutes !== null ? formatTimeSpent(durationMinutes) : 'unknown duration';
-  const bedtimeStr = sleepLog.restStarted
-    ? new Date(sleepLog.restStarted).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : 'unknown';
-  console.log(`☀️  Good morning! Slept ${durationStr} (bed: ${bedtimeStr}, wake: ${wakeTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`);
-  console.log(JSON.stringify({
-    status: 'wake_logged',
-    wakeTime: wakeTimestamp,
-    restStarted: sleepLog.restStarted,
-    durationMinutes,
-    date: sleepLog.date
-  }));
-}
-
-function enterRestMode() {
-  const current = loadCurrent();
-  const now = new Date();
-  const timestamp = now.toISOString();
-  const strategies = loadStrategies();
-
-  // If already sleeping, just show protocol
-  if (current.task && current.task.title === 'sleeping') {
-    console.log('\n😴 Already in rest mode.');
-    displayBedtimeProtocol();
-    promptForStrategies(strategies, timestamp);
-    return;
-  }
-
-  // End current session
-  if (current.task) {
-    const endResult = endCurrentSession(current, now);
-    if (endResult && current.task.sourceType === 'pending') {
-      const pending = loadPending();
-      upsertPending(pending, endResult.taskData);
-      savePending(pending);
-    }
-    const emoji = CONTEXT_EMOJI_MAP[current.task.activityContext] || '💼';
-    const timeStr = formatTimeSpent(endResult ? endResult.totalTimeSpent : 0);
-    console.log(`\n⏸️  Paused: ${emoji} ${current.task.title} (${timeStr})`);
-  }
-
-  // Find sleeping routine task
-  const routine = loadRoutine();
-  const sleepTask = routine.find(t => t.title === 'sleeping' && t.routine);
-
-  if (!sleepTask) {
-    // Create sleeping routine task
-    const newSleepTask = {
-      id: generateId(),
-      title: 'sleeping',
-      activityContext: 'health',
-      category: 'General',
-      timeSpent: 0,
-      sessions: [],
-      notes: [],
-      routine: true
-    };
-    routine.push(newSleepTask);
-    saveRoutine(routine);
-
-    current.task = {
-      title: 'sleeping',
-      activityContext: 'health',
-      startedAt: timestamp,
-      timeSpent: 0,
-      sourceType: 'routine',
-      sourceId: newSleepTask.id,
-      notes: [],
-      sessions: []
-    };
-  } else {
-    current.task = {
-      title: 'sleeping',
-      activityContext: 'health',
-      startedAt: timestamp,
-      timeSpent: sleepTask.timeSpent || 0,
-      sourceType: 'routine',
-      sourceId: sleepTask.id,
-      notes: [],
-      sessions: sleepTask.sessions || []
-    };
-  }
-
-  current.contextFilter = 'health';
-  current.contextSums = calculateContextSums();
-  saveCurrent(current);
-
-  displayBedtimeProtocol();
-  promptForStrategies(strategies, timestamp);
-}
-
-function promptForStrategies(strategies, timestamp) {
-  const readline = require('readline');
-
-  console.log('\nSelect sleep strategies (comma-separated numbers, Enter to skip):');
-  displayStrategies(strategies);
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  rl.question('\n> ', (answer) => {
-    const selectedIds = parseStrategyInput(answer, strategies);
-    const selectedNames = selectedIds.map(id => strategies.find(s => s.id === id)?.name).filter(Boolean);
-    const medicationStrategies = selectedIds
-      .map(id => strategies.find(s => s.id === id))
-      .filter(s => s && (s.category === 'medication' || s.category === 'supplement'));
-
-    const sleepLog = {
-      date: TODAY,
-      restStarted: timestamp,
-      wakeTime: null,
-      durationMinutes: null,
-      quality: null,
-      notes: null,
-      strategies: { planned: selectedIds, actual: [...selectedIds] },
-      strategiesUsed: selectedNames,
-      medicationUsed: medicationStrategies.some(s => s.category === 'medication'),
-      supplementsUsed: medicationStrategies.filter(s => s.category === 'supplement').map(s => s.name)
-    };
-
-    saveSleepLog(sleepLog);
-
-    if (selectedNames.length > 0) {
-      console.log(`\n😴 Rest mode started. Selected: ${selectedNames.join(', ')}`);
-    } else {
-      console.log('\n😴 Rest mode started.');
-    }
-    console.log('💤 Good night! Run /t wake when you get up.\n');
-    rl.close();
-  });
-}
-
-function exitRestMode() {
-  const readline = require('readline');
-  const current = loadCurrent();
-  const wakeTime = new Date();
-  const wakeTimestamp = wakeTime.toISOString();
-  const strategies = loadStrategies();
-
-  let sleepLog = loadSleepLog(TODAY);
-  if (!sleepLog) {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = getLocalDate(yesterday);
-    sleepLog = loadSleepLog(yStr);
-  }
-
-  if (!sleepLog || !sleepLog.restStarted) {
-    console.log('\n⚠️  No /t rest record found. Creating wake-only record.');
-    sleepLog = {
-      date: TODAY, restStarted: null, wakeTime: wakeTimestamp,
-      durationMinutes: null, quality: null, notes: null,
-      strategies: { planned: [], actual: [] },
-      strategiesUsed: [], medicationUsed: false, supplementsUsed: []
-    };
-  }
-
-  let durationMinutes = null;
-  if (sleepLog.restStarted) {
-    durationMinutes = Math.round((wakeTime - new Date(sleepLog.restStarted)) / 60000);
-  }
-
-  console.log('\n☀️  Good morning! Sleep summary:');
-  console.log('────────────────────────────────');
-  if (sleepLog.restStarted) {
-    console.log(`  Went to bed: ${new Date(sleepLog.restStarted).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-  }
-  console.log(`  Woke up:     ${wakeTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-  if (durationMinutes !== null) {
-    console.log(`  Duration:    ${formatTimeSpent(durationMinutes)}`);
-  }
-  if (sleepLog.strategiesUsed && sleepLog.strategiesUsed.length > 0) {
-    console.log(`\n  Strategies planned: ${sleepLog.strategiesUsed.join(', ')}`);
-  }
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  rl.question('\nSleep quality (1-5, 5=excellent): ', (qualityAnswer) => {
-    const quality = parseInt(qualityAnswer);
-    const validQuality = (!isNaN(quality) && quality >= 1 && quality <= 5) ? quality : null;
-
-    const plannedIds = sleepLog.strategies?.planned || [];
-    console.log('\nStrategies used at bedtime:');
-    displayStrategies(strategies, plannedIds);
-
-    rl.question('\nAdd more strategies? (comma-separated numbers, Enter to keep as-is): ', (stratAnswer) => {
-      let actualIds = [...plannedIds];
-      const additionalIds = parseStrategyInput(stratAnswer, strategies);
-      if (additionalIds.length > 0) {
-        actualIds = [...new Set([...actualIds, ...additionalIds])];
-      }
-
-      const actualNames = actualIds.map(id => strategies.find(s => s.id === id)?.name).filter(Boolean);
-      const medicationStrategies = actualIds
-        .map(id => strategies.find(s => s.id === id))
-        .filter(s => s && (s.category === 'medication' || s.category === 'supplement'));
-
-      rl.question('\nNotes (Enter to skip): ', (notesAnswer) => {
-        const notes = notesAnswer.trim() || null;
-
-        sleepLog.wakeTime = wakeTimestamp;
-        sleepLog.durationMinutes = durationMinutes;
-        sleepLog.quality = validQuality;
-        sleepLog.notes = notes;
-        sleepLog.strategies.actual = actualIds;
-        sleepLog.strategiesUsed = actualNames;
-        sleepLog.medicationUsed = medicationStrategies.some(s => s.category === 'medication');
-        sleepLog.supplementsUsed = medicationStrategies.filter(s => s.category === 'supplement').map(s => s.name);
-
-        saveSleepLog(sleepLog);
-
-        // End sleeping session and switch to unstructured
-        if (current.task && current.task.title === 'sleeping') {
-          endCurrentSession(current, wakeTime);
-          // routine task already updated in endCurrentSession
-
-          // Clear current task (user picks what to do next)
-          current.task = null;
-          current.contextFilter = null;
-          current.contextSums = calculateContextSums();
-          saveCurrent(current);
-        }
-
-        const qualityStr = validQuality ? `quality ${validQuality}/5` : 'no quality rated';
-        const durationStr = durationMinutes !== null ? formatTimeSpent(durationMinutes) : 'unknown duration';
-        console.log(`\n✅ Sleep logged: ${durationStr}, ${qualityStr}`);
-        if (actualNames.length > 0) {
-          console.log(`   Strategies: ${actualNames.join(', ')}`);
-        }
-
-        displayMorningProtocol();
-        console.log('');
-        rl.close();
-      });
-    });
-  });
-}
-
-function showSleepStats(days = 7) {
-  const sleepLogs = [];
-
-  for (let i = 0; i < days; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const dateStr = getLocalDate(d);
-    const log = loadSleepLog(dateStr);
-    if (log && log.wakeTime) sleepLogs.push(log);
-  }
-
-  if (sleepLogs.length === 0) {
-    console.log('\n📊 No sleep data found for the last ' + days + ' days.');
-    console.log('   Use /t rest and /t wake to start tracking.\n');
-    return;
-  }
-
-  console.log(`\n📊 Sleep Report (Last ${days} days, ${sleepLogs.length} nights logged)`);
-  console.log('──────────────────────────────────────────────');
-
-  const durations = sleepLogs.filter(l => l.durationMinutes != null).map(l => l.durationMinutes);
-  if (durations.length > 0) {
-    const avgDuration = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
-    console.log(`  Avg Duration:  ${formatTimeSpent(avgDuration)}`);
-  }
-
-  const qualities = sleepLogs.filter(l => l.quality).map(l => l.quality);
-  if (qualities.length > 0) {
-    const avgQuality = (qualities.reduce((a, b) => a + b, 0) / qualities.length).toFixed(1);
-    console.log(`  Avg Quality:   ${avgQuality}/5`);
-  }
-
-  const bedtimes = sleepLogs.filter(l => l.restStarted).map(l => new Date(l.restStarted));
-  if (bedtimes.length > 0) {
-    const minutesPastMidnight = bedtimes.map(d => {
-      let mins = d.getHours() * 60 + d.getMinutes();
-      if (mins < 720) mins += 1440;
-      return mins;
-    });
-    const avgMinutes = Math.round(minutesPastMidnight.reduce((a, b) => a + b, 0) / minutesPastMidnight.length) % 1440;
-    const avgH = Math.floor(avgMinutes / 60);
-    const avgM = avgMinutes % 60;
-    const period = avgH >= 12 ? 'PM' : 'AM';
-    const displayH = avgH > 12 ? avgH - 12 : (avgH === 0 ? 12 : avgH);
-    console.log(`  Avg Bedtime:   ${displayH}:${String(avgM).padStart(2, '0')} ${period}`);
-  }
-
-  const wakeTimes = sleepLogs.filter(l => l.wakeTime).map(l => new Date(l.wakeTime));
-  if (wakeTimes.length > 0) {
-    const wakeMinutes = wakeTimes.map(d => d.getHours() * 60 + d.getMinutes());
-    const avgWake = Math.round(wakeMinutes.reduce((a, b) => a + b, 0) / wakeMinutes.length);
-    const wH = Math.floor(avgWake / 60);
-    const wM = avgWake % 60;
-    const wPeriod = wH >= 12 ? 'PM' : 'AM';
-    const wDisplayH = wH > 12 ? wH - 12 : (wH === 0 ? 12 : wH);
-    console.log(`  Avg Wake:      ${wDisplayH}:${String(wM).padStart(2, '0')} ${wPeriod}`);
-  }
-
-  if (qualities.length > 0) {
-    const bestLog = sleepLogs.reduce((best, l) => (l.quality && (!best || l.quality > best.quality)) ? l : best, null);
-    const worstLog = sleepLogs.reduce((worst, l) => (l.quality && (!worst || l.quality < worst.quality)) ? l : worst, null);
-
-    if (bestLog) {
-      const bestDate = new Date(bestLog.date + 'T12:00:00');
-      const bestDateStr = bestDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const bestDur = bestLog.durationMinutes ? formatTimeSpent(bestLog.durationMinutes) : '?';
-      console.log(`\n  Best night:    ${bestDateStr} (${bestDur}, quality ${bestLog.quality})`);
-    }
-    if (worstLog && worstLog !== bestLog) {
-      const worstDate = new Date(worstLog.date + 'T12:00:00');
-      const worstDateStr = worstDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const worstDur = worstLog.durationMinutes ? formatTimeSpent(worstLog.durationMinutes) : '?';
-      console.log(`  Worst night:   ${worstDateStr} (${worstDur}, quality ${worstLog.quality})`);
-    }
-  }
-
-  const strategies = loadStrategies();
-  const strategyStats = {};
-  sleepLogs.forEach(log => {
-    (log.strategies?.actual || []).forEach(id => {
-      const s = strategies.find(st => st.id === id);
-      if (s && log.quality) {
-        if (!strategyStats[s.name]) strategyStats[s.name] = { totalQuality: 0, count: 0 };
-        strategyStats[s.name].totalQuality += log.quality;
-        strategyStats[s.name].count++;
-      }
-    });
-  });
-
-  const sortedStrategies = Object.entries(strategyStats)
-    .map(([name, stats]) => ({ name, avgQuality: (stats.totalQuality / stats.count).toFixed(1), count: stats.count }))
-    .sort((a, b) => b.avgQuality - a.avgQuality);
-
-  if (sortedStrategies.length > 0) {
-    console.log('\n  Strategy effectiveness:');
-    sortedStrategies.forEach(s => {
-      console.log(`    ${s.name}: avg quality ${s.avgQuality} (used ${s.count}x)`);
-    });
-  }
-
-  const medNights = sleepLogs.filter(l => l.medicationUsed).length;
-  const suppNights = sleepLogs.filter(l => l.supplementsUsed && l.supplementsUsed.length > 0).length;
-  if (medNights > 0 || suppNights > 0) {
-    console.log('\n  Aid usage:');
-    if (medNights > 0) console.log(`    Medication: ${medNights}/${sleepLogs.length} nights`);
-    if (suppNights > 0) console.log(`    Supplements: ${suppNights}/${sleepLogs.length} nights`);
-  }
-
-  console.log('');
-}
 
 // ─── Usage ──────────────────────────────────────────────────────────────────
 
@@ -3285,7 +2815,7 @@ try {
   }
 
   // Handle set-priority: pri-N <1-5>
-  if (command && command.startsWith('pri-')) {
+  if (command && command.startsWith('pri-') && command !== 'pri-id') {
     const taskNumber = parseInt(command.substring(4));
     if (isNaN(taskNumber)) {
       console.error('\n❌ Usage: pri-N <1-5>  (1=high, 3=normal, 5=low)\n');
@@ -3300,8 +2830,8 @@ try {
     process.exit(0);
   }
 
-  // Handle set-focus: focus-N <0-5>
-  if (command && command.startsWith('focus-')) {
+  // Handle set-focus: focus-N <0-5> (but not focus-id, which is handled in switch)
+  if (command && command.startsWith('focus-') && command !== 'focus-id') {
     const taskNumber = parseInt(command.substring(6));
     if (isNaN(taskNumber)) {
       console.error('\n❌ Usage: focus-N <0-5>  (0=trivial, 3=medium, 5=deep work)\n');
@@ -3593,6 +3123,10 @@ try {
       pullGoogleTasks();
       break;
 
+    case 'fill':
+      fillUnstructured();
+      break;
+
     case 'sync': {
       const syncDates = [TODAY];
       if (args[0] === 'all' || args[0] === 'yesterday') {
@@ -3726,7 +3260,6 @@ try {
     case 'cul': case 'cultivo':
     case 'proj': case 'projects':
     case 'heal': case 'health':
-    case 'rest':
     case 'learn': case 'learning':
     case 'us': case 'unstructured': {
       // Check for ": taskName" pattern → switch to named routine task
@@ -3765,26 +3298,6 @@ try {
 
     case 'all':
       clearContextFilter();
-      break;
-
-    case 'rest':
-      enterRestMode();
-      break;
-
-    case 'wake':
-      exitRestMode();
-      break;
-
-    case 'rest-log':
-      restLogNonInteractive();
-      break;
-
-    case 'wake-log':
-      wakeLogNonInteractive();
-      break;
-
-    case 'sleep:stats':
-      showSleepStats(args.length > 0 ? parseInt(args[0]) || 7 : 7);
       break;
 
     default:

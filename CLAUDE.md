@@ -302,7 +302,6 @@ For full command reference, context auto-detection keywords, routine vs novel ta
 - `/t ? <search>` - Fuzzy search tasks by title and switch to best match
 - `/t per|soc|prof|cul|proj|heal|learn|us|all` - Context filter
 - `/t jira` / `/t pull-goog` - Pull from Jira / Google Tasks
-- `/t rest` / `/t wake` - Sleep journaling (pre-sleep wind-down / post-sleep reflection)
 - `/t eeh` - Distraction journaling (quick check-in, does NOT pause current task)
 - `/t end [X-Y]` - Generate end-of-day update (date range optional)
 - `/t intentions "text"` - Morning intentions protocol (see below)
