@@ -17,6 +17,7 @@ import BedtimeIcon from '@mui/icons-material/Bedtime';
 import MedicationIcon from '@mui/icons-material/Medication';
 import EmailIcon from '@mui/icons-material/Email';
 import FlagIcon from '@mui/icons-material/Flag';
+import ExploreIcon from '@mui/icons-material/Explore';
 import TimeView from '../src/components/TimeView';
 import FeedsView from '../src/components/FeedsView';
 import FocusTimeline from '../src/components/FocusTimeline';
@@ -27,6 +28,9 @@ import SleepView from '../src/components/SleepView';
 import SupplementsView from '../src/components/SupplementsView';
 import EmailView from '../src/components/EmailView';
 import PlanningView from '../src/components/PlanningView';
+import IntentionMatrix from '../src/components/IntentionMatrix';
+import { ActiveTask } from '../src/components/TasksView';
+import { useAllTasks, useTaskAction } from '../src/hooks/useApi';
 
 const DRAWER_WIDTH = 240;
 const DRAWER_COLLAPSED = 56;
@@ -34,6 +38,7 @@ const DRAWER_COLLAPSED = 56;
 const VIEWS = [
   { key: 'focus', label: 'Focus', icon: <BoltIcon /> },
   { key: 'planning', label: 'Planning', icon: <FlagIcon /> },
+  { key: 'intentions', label: 'Intentions', icon: <ExploreIcon /> },
   { key: 'email', label: 'Email', icon: <EmailIcon /> },
   { key: 'feeds', label: 'Feeds', icon: <RssFeedIcon /> },
   { key: 'time', label: 'Time', icon: <BarChartIcon /> },
@@ -48,6 +53,9 @@ export default function Home() {
   const [view, setView] = useState('focus');
   const [viewParams, setViewParams] = useState({});
   const [mounted, setMounted] = useState(false);
+  const { data: tasksData } = useAllTasks();
+  const taskAction = useTaskAction();
+  const currentTask = tasksData?.current?.task || null;
 
   // Sync view from URL params on mount and popstate
   useEffect(() => {
@@ -139,8 +147,18 @@ export default function Home() {
         flexGrow: 1, p: 3, mt: 6,
         minWidth: 0,
       }}>
+        {/* Sticky current task bar — visible across all views */}
+        <Box sx={{
+          position: 'sticky',
+          top: 48, // below dense AppBar
+          zIndex: (t) => t.zIndex.appBar - 1,
+          mx: -3, mt: -3, mb: 2, px: 3,
+        }}>
+          <ActiveTask task={currentTask} action={taskAction} pending={tasksData?.pending} routine={tasksData?.routine} sticky />
+        </Box>
         {view === 'focus'   && <FocusTimeline onNavigate={changeView} />}
         {view === 'planning' && <PlanningView initialGoalId={viewParams.goalId} />}
+        {view === 'intentions' && <IntentionMatrix onNavigate={changeView} />}
         {view === 'sleep'   && <SleepView />}
         {view === 'email'   && <EmailView />}
         {view === 'feeds'   && <FeedsView />}

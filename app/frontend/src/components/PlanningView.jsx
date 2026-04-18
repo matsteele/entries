@@ -12,6 +12,7 @@ import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import LoopIcon from '@mui/icons-material/Loop';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 import * as d3Hierarchy from 'd3-hierarchy';
@@ -224,6 +225,7 @@ function TreemapCell({ node, onClick, onSelect, isSelected, addedToday }) {
       onClick={(e) => { e.stopPropagation(); onClick(d); }}
       sx={{
         position: 'absolute',
+        boxSizing: 'border-box',
         left: node.x0,
         top: node.y0,
         width: w,
@@ -324,7 +326,7 @@ function TreemapCell({ node, onClick, onSelect, isSelected, addedToday }) {
 
 // ─── Side Panel ─────────────────────────────────────────────────────────────
 
-function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedToday }) {
+function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedToday, addedAsRoutine, setAddedAsRoutine }) {
   const d = node;
   const isProject = d.type === 'project';
   const isGoal = d.type === 'goal';
@@ -400,6 +402,27 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
   const goalNav = navStack?.find(n => n.data?.type === 'goal');
   const projectNav = navStack?.find(n => n.data?.type === 'project');
   const epicNav = navStack?.find(n => n.data?.type === 'epic');
+
+  const handleAddAsRoutine = (item) => {
+    const CTX_TO_CODE = {
+      personal: 'per', social: 'soc', professional: 'prof', cultivo: 'cul',
+      projects: 'proj', health: 'heal', learning: 'learn', unstructured: 'us',
+    };
+    const resolvedContext = item.context
+      || navStack?.find(n => n.data?.type === 'goal')?.data?.context
+      || 'projects';
+    taskAction.mutate({
+      action: 'add-routine-from-plan',
+      title: item.name || item.title,
+      context: CTX_TO_CODE[resolvedContext] || resolvedContext,
+      projectId: item.id,
+      goalId: item.goal_id || navStack?.find(n => n.data?.type === 'goal')?.data?.id || null,
+      projectTitle: item.name || item.title,
+      goalTitle: navStack?.find(n => n.data?.type === 'goal')?.data?.name || '',
+    }, {
+      onSuccess: () => setAddedAsRoutine(prev => new Set(prev).add(item.id)),
+    });
+  };
 
   const handlePushToday = (action) => {
     // Resolve context with inheritance: action → epic → project → goal → 'projects'
@@ -566,6 +589,35 @@ function SidePanel({ node, onClose, onDrillDown, navStack, addedToday, setAddedT
         </Box>
       )}
 
+      {/* Add as Routine — projects */}
+      {isProject && d.status !== 'completed' && (
+        <Box sx={{ mb: 2 }}>
+          {addedAsRoutine.has(d.id) ? (
+            <Button
+              variant="contained"
+              size="small"
+              fullWidth
+              startIcon={<CheckCircleIcon />}
+              disabled
+              sx={{ bgcolor: '#4CAF50', color: '#fff', '&.Mui-disabled': { bgcolor: '#388E3C', color: '#fff', opacity: 0.8 } }}
+            >
+              Added as Routine
+            </Button>
+          ) : (
+            <Button
+              variant="outlined"
+              size="small"
+              fullWidth
+              startIcon={<LoopIcon />}
+              onClick={() => handleAddAsRoutine(d)}
+              sx={{ borderColor: 'rgba(255,255,255,0.3)', color: 'text.secondary', '&:hover': { borderColor: '#90CAF9', color: '#90CAF9' } }}
+            >
+              Add as Routine Task
+            </Button>
+          )}
+        </Box>
+      )}
+
       {/* Add epic (projects) */}
       {isProject && (
         <Box sx={{ mb: 2 }}>
@@ -706,6 +758,7 @@ export default function PlanningView({ initialGoalId } = {}) {
   const [selectedNode, setSelectedNode] = useState(null);
   const [containerSize, setContainerSize] = useState({ width: 800, height: 500 });
   const [addedToday, setAddedToday] = useState(new Set());
+  const [addedAsRoutine, setAddedAsRoutine] = useState(new Set());
   const containerRef = useRef(null);
 
   // Helper: find a node by id in the treemap tree
@@ -904,7 +957,7 @@ export default function PlanningView({ initialGoalId } = {}) {
           ref={containerRef}
           sx={{
             position: 'relative', mx: 2, mb: 1,
-            height: Math.min(600, Math.max(200, (currentData?.children?.length || 3) * 90)),
+            height: Math.min(600, Math.max(250, (currentData?.children?.length || 3) * 100)),
           }}
         >
           {leaves.map(leaf => (
@@ -963,6 +1016,8 @@ export default function PlanningView({ initialGoalId } = {}) {
             navStack={navStack}
             addedToday={addedToday}
             setAddedToday={setAddedToday}
+            addedAsRoutine={addedAsRoutine}
+            setAddedAsRoutine={setAddedAsRoutine}
           />
         ) : (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', opacity: 0.4 }}>

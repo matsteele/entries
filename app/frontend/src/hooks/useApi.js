@@ -75,9 +75,14 @@ export function useSaveSleepQuality() {
 }
 
 export function useCalendarEvents(date) {
+  const tz = typeof window !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : '';
+  const params = new URLSearchParams();
+  if (date) params.set('date', date);
+  if (tz) params.set('tz', tz);
+  const url = `/api/calendar?${params}`;
   return useQuery({
-    queryKey: ['calendar', date],
-    queryFn: () => fetchJson(`/api/calendar?date=${date}`),
+    queryKey: ['calendar', date, tz],
+    queryFn: () => fetchJson(url),
     enabled: !!date,
     refetchInterval: 60000,
   });
@@ -216,6 +221,50 @@ export function useUpdateSession() {
   });
 }
 
+export function useDeleteSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      fetch('/api/sessions', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(new Error(e.error || r.statusText))); return r.json(); }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['focus'] });
+      qc.invalidateQueries({ queryKey: ['time'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+}
+
+export function useUpdateSleepSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      fetch('/api/sleep', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sleep'] }),
+  });
+}
+
+export function useAddSleepSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      fetch('/api/sleep', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sleep'] }),
+  });
+}
+
+export function useDeleteSleepSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      fetch('/api/sleep', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sleep'] }),
+  });
+}
+
 // ─── Daily Intentions ─────────────────────────────────────────────────────
 
 export function useIntentions(date) {
@@ -324,5 +373,50 @@ export function useUpdateAction() {
       fetch(`/api/actions/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) })
         .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['goals'] }),
+  });
+}
+
+export function useIntentionMatrix({ scope, startYear, endYear }) {
+  const params = new URLSearchParams();
+  if (scope) params.set('scope', scope);
+  if (startYear) params.set('startYear', startYear);
+  if (endYear) params.set('endYear', endYear);
+  return useQuery({
+    queryKey: ['intentions', 'matrix', scope, startYear, endYear],
+    queryFn: () => fetchJson(`/api/intentions/matrix?${params}`),
+    staleTime: 30000,
+  });
+}
+
+export function usePlaceItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ table, id, ...updates }) => {
+      const endpoint = table === 'epics' ? `/api/epics/${id}`
+                     : table === 'goals' ? `/api/goals/${id}`
+                     : `/api/projects/${id}`;
+      return fetch(endpoint, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      }).then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; }));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['intentions'] });
+      qc.invalidateQueries({ queryKey: ['goals'] });
+    },
+  });
+}
+
+export function useSaveBiweekContext() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      fetch('/api/biweek-context', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.statusText); return d; })),
+    onSuccess: (_, vars) => qc.invalidateQueries({ queryKey: ['intentions'] }),
   });
 }

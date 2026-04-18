@@ -9,7 +9,7 @@ export async function PATCH(request, { params }) {
   try {
     const { id } = await params;
     const updates = await request.json();
-    const allowed = ['title', 'description', 'horizon', 'status', 'context', 'weight', 'sort_order', 'weekly_target_minutes'];
+    const allowed = ['title', 'description', 'horizon', 'status', 'context', 'weight', 'sort_order', 'weekly_target_minutes', 'target_year', 'dimension'];
     const sets = [];
     const values = [];
     let i = 1;

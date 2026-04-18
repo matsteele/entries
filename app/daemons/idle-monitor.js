@@ -82,7 +82,6 @@ function autoPauseTask(current, endTime) {
       category: categorizeWork(task.title),
       priority: 'medium',
       timeSpent: totalTimeSpent,
-      notes: [...(task.notes || []), { text: 'Auto-paused (idle detected)', timestamp: endTimeISO }],
       sessions: [...(task.sessions || []), session]
     };
     if (task.jiraTicket) taskData.jiraTicket = task.jiraTicket;

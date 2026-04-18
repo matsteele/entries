@@ -11,11 +11,23 @@ import LightbulbIcon from '@mui/icons-material/Lightbulb';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import AddIcon from '@mui/icons-material/Add';
 import { useIntentions, useSaveIntentions, useTaskAction } from '../hooks/useApi';
-import { CONTEXT_CONFIG, TYPE_ICONS } from '../lib/contexts';
+import { CONTEXT_CONFIG } from '../lib/contexts';
+
+const TYPE_LABELS = {
+  routine: '🔄',
+  action: '⚡',
+  epic: '🏔️',
+  project: '🚀',
+  goal: '🎯',
+  jira: '🎫',
+  'google-task': '📋',
+  pending: '📌',
+  none: '•',
+};
 
 function IntentionRow({ item, onNavigate, taskAction }) {
   const cfg = CONTEXT_CONFIG[item.matchContext] || {};
-  const typeIcon = TYPE_ICONS[item.matchType] || '•';
+  const typeIcon = TYPE_LABELS[item.matchType] || '•';
   const actions = item.actions || [];
   const busy = taskAction?.isPending;
 
@@ -24,77 +36,107 @@ function IntentionRow({ item, onNavigate, taskAction }) {
     if (id && onNavigate) onNavigate('planning', { goalId: id });
   };
 
+  const resolvedCtx = cfg.code || CONTEXT_CONFIG[item.matchContext]?.code || item.matchContext || 'proj';
+
   const handleAdd = () => {
-    const ctx = cfg.code || item.matchContext || 'proj';
-    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: ctx });
+    taskAction?.mutate({ action: 'add-task', title: item.matchTitle || item.intention, context: resolvedCtx });
+  };
+
+  const handleStart = () => {
+    taskAction?.mutate({ action: 'add-switch', title: item.matchTitle || item.intention, context: resolvedCtx });
   };
 
   const isLinkable = item.matchId || item.goalId;
 
   return (
-    <Box sx={{ py: 0.6, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      <Stack direction="row" alignItems="center" spacing={0.75}>
-        {/* Intention text */}
-        <Typography variant="body2" sx={{ fontSize: 12, lineHeight: 1.3 }}>
-          {item.intention}
-        </Typography>
-
-        {/* Action buttons — right next to text */}
-        {actions.includes('switch') && (
-          <Tooltip title="Switch to">
-            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy}
-              onClick={() => taskAction?.mutate({ action: 'switch-to-search', query: item.routineTitle })}>
-              <PlayArrowIcon sx={{ fontSize: 13, color: '#4CAF50' }} />
-            </IconButton>
-          </Tooltip>
-        )}
-        {actions.includes('add') && (
-          <Tooltip title="Add to docket">
-            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
-              <AddIcon sx={{ fontSize: 13 }} />
-            </IconButton>
-          </Tooltip>
-        )}
-        {actions.includes('start') && (
-          <Tooltip title="Start now">
-            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
-              <PlayArrowIcon sx={{ fontSize: 13, color: '#4CAF50' }} />
-            </IconButton>
-          </Tooltip>
-        )}
-        {actions.includes('add-novel') && (
-          <Tooltip title="Add as novel task">
-            <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
-              <AddIcon sx={{ fontSize: 13 }} />
-            </IconButton>
-          </Tooltip>
-        )}
+    <Box sx={{ py: 0.5, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <Stack direction="row" alignItems="flex-start" spacing={0.75}>
+        <Typography sx={{ fontSize: 12, mt: 0.1, minWidth: 16 }}>{typeIcon}</Typography>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontSize: 12, lineHeight: 1.4 }}>
+            {item.intention}
+          </Typography>
+          {/* Match breadcrumb */}
+          {item.breadcrumb && (
+            <Typography
+              variant="caption"
+              onClick={isLinkable ? handleLink : undefined}
+              sx={{
+                fontSize: '0.6rem',
+                color: cfg.color || 'text.disabled',
+                cursor: isLinkable ? 'pointer' : 'default',
+                '&:hover': isLinkable ? { textDecoration: 'underline' } : {},
+                display: 'block',
+                mt: 0.15,
+              }}
+            >
+              {cfg.emoji} {item.breadcrumb}
+            </Typography>
+          )}
+          {item.matchType === 'routine' && item.matchTitle && (
+            <Typography variant="caption" sx={{ fontSize: '0.6rem', color: '#81C784', display: 'block', mt: 0.15 }}>
+              🔄 {item.matchTitle}
+            </Typography>
+          )}
+          {item.matchType === 'jira' && item.matchTitle && (
+            <Typography variant="caption" component="a"
+              href={item.jiraUrl || '#'} target="_blank" rel="noopener noreferrer"
+              sx={{ fontSize: '0.6rem', color: '#90CAF9', display: 'block', mt: 0.15, textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}>
+              🎫 {item.matchTitle}
+            </Typography>
+          )}
+          {item.matchType === 'google-task' && item.matchTitle && (
+            <Typography variant="caption" sx={{ fontSize: '0.6rem', color: '#CE93D8', display: 'block', mt: 0.15 }}>
+              📋 {item.matchTitle}
+            </Typography>
+          )}
+          {item.matchType === 'pending' && item.matchTitle && (
+            <Typography variant="caption" sx={{ fontSize: '0.6rem', color: '#FFB74D', display: 'block', mt: 0.15 }}>
+              📌 {item.matchTitle} (already in docket)
+            </Typography>
+          )}
+          {item.matchType === 'none' && (() => {
+            const noCfg = CONTEXT_CONFIG[item.matchContext] || {};
+            return (
+              <Typography variant="caption" sx={{ color: noCfg.color || 'text.disabled', fontSize: '0.55rem' }}>
+                {noCfg.emoji ? `${noCfg.emoji} ${noCfg.label} · ` : ''}no match
+              </Typography>
+            );
+          })()}
+        </Box>
+        {/* Action buttons */}
+        <Stack direction="row" spacing={0} sx={{ mt: 0.1 }}>
+          {actions.includes('switch') && (
+            <Tooltip title="Switch to routine">
+              <IconButton size="small" sx={{ p: 0.25 }} disabled={busy}
+                onClick={() => taskAction?.mutate({ action: 'switch-to-search', query: item.routineTitle })}>
+                <PlayArrowIcon sx={{ fontSize: 13, color: '#4CAF50' }} />
+              </IconButton>
+            </Tooltip>
+          )}
+          {actions.includes('add') && (
+            <Tooltip title="Add to docket">
+              <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
+                <AddIcon sx={{ fontSize: 13 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+          {actions.includes('start') && (
+            <Tooltip title="Start now">
+              <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleStart}>
+                <PlayArrowIcon sx={{ fontSize: 13, color: '#4CAF50' }} />
+              </IconButton>
+            </Tooltip>
+          )}
+          {actions.includes('add-novel') && (
+            <Tooltip title="Add as new task">
+              <IconButton size="small" sx={{ p: 0.25 }} disabled={busy} onClick={handleAdd}>
+                <AddIcon sx={{ fontSize: 13 }} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Stack>
       </Stack>
-
-      {/* Match tag — clickable chip below intention */}
-      {item.matchTitle && (
-        <Chip
-          icon={<span style={{ fontSize: 11, marginLeft: 6 }}>{typeIcon}</span>}
-          label={`${cfg.emoji || ''} ${item.matchTitle}${item.note ? ` — ${item.note}` : ''}`}
-          size="small"
-          variant="outlined"
-          onClick={isLinkable ? handleLink : undefined}
-          sx={{
-            mt: 0.25,
-            fontSize: '0.65rem',
-            height: 20,
-            cursor: isLinkable ? 'pointer' : 'default',
-            borderColor: cfg.color || '#555',
-            color: 'rgba(255,255,255,0.85)',
-            '&:hover': isLinkable ? { bgcolor: 'rgba(255,255,255,0.08)' } : {},
-          }}
-        />
-      )}
-      {item.matchType === 'none' && (
-        <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: 10, ml: 0.5 }}>
-          no match in hierarchy
-        </Typography>
-      )}
     </Box>
   );
 }
@@ -124,6 +166,7 @@ export default function DailyIntentions({ date, onNavigate }) {
 
   const handleSave = () => {
     if (!draft.trim()) return;
+    // Save narrative only — the API auto-analyzes into outline
     saveIntentions.mutate(
       { date, morning_intention: draft.trim() },
       { onSuccess: () => setEditing(false) }
@@ -162,7 +205,7 @@ export default function DailyIntentions({ date, onNavigate }) {
           Daily Intentions
         </Typography>
         {outline.length > 0 && !editing && (
-          <Chip label={`${outline.length} matched`} size="small" variant="outlined"
+          <Chip label={`${outline.length} items`} size="small" variant="outlined"
             sx={{ fontSize: '0.6rem', height: 18, mr: 0.5 }} />
         )}
         {hasIntention && !editing && (
@@ -197,7 +240,7 @@ export default function DailyIntentions({ date, onNavigate }) {
               <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
                 <Button size="small" variant="contained" startIcon={<SaveIcon />}
                   onClick={handleSave} disabled={!draft.trim() || saveIntentions.isPending}>
-                  Save
+                  {saveIntentions.isPending ? 'Analyzing...' : 'Save & Analyze'}
                 </Button>
                 <Button size="small" onClick={() => { setEditing(false); setDraft(intentions?.morning_intention || ''); }}>
                   Cancel
@@ -206,7 +249,7 @@ export default function DailyIntentions({ date, onNavigate }) {
             </Box>
           ) : (
             <Box>
-              {/* Narrative */}
+              {/* Narrative — shown as muted italic */}
               <Typography variant="body2" sx={{
                 mt: 1, mb: 1, fontSize: 11, lineHeight: 1.5,
                 color: 'text.disabled', fontStyle: 'italic',
@@ -214,7 +257,7 @@ export default function DailyIntentions({ date, onNavigate }) {
                 {intentions?.morning_intention}
               </Typography>
 
-              {/* Outline with matches */}
+              {/* Analyzed outline */}
               {outline.length > 0 && (
                 <Box sx={{ mt: 1 }}>
                   {outline.map((item, i) => (
@@ -223,20 +266,17 @@ export default function DailyIntentions({ date, onNavigate }) {
                 </Box>
               )}
 
-              {/* Legacy format backwards compat */}
-              {!outline.length && allocations?.matched?.length > 0 && (
-                <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
-                  {allocations.matched.map((g, i) => {
-                    const cfg = CONTEXT_CONFIG[g.context] || {};
-                    return (
-                      <Chip key={g.goalId || i}
-                        label={`${cfg.emoji || '🎯'} ${g.title}`} size="small" variant="outlined"
-                        onClick={() => onNavigate?.('planning', { goalId: g.goalId })}
-                        sx={{ fontSize: '0.7rem', cursor: 'pointer', borderColor: cfg.color || '#666' }}
-                      />
-                    );
-                  })}
-                </Stack>
+              {/* No outline yet — offer to re-analyze */}
+              {!outline.length && hasIntention && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  sx={{ mt: 1, fontSize: '0.7rem' }}
+                  disabled={saveIntentions.isPending}
+                  onClick={() => saveIntentions.mutate({ date, morning_intention: intentions.morning_intention })}
+                >
+                  {saveIntentions.isPending ? 'Analyzing...' : 'Analyze'}
+                </Button>
               )}
             </Box>
           )}

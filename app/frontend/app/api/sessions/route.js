@@ -27,8 +27,8 @@ export async function PATCH(request) {
     const body = await request.json();
     const { taskId, sourceFile, sessionIdx, startedAt, newStartedAt, newEndedAt, newFocusLevel } = body;
 
-    if (!taskId || sourceFile === undefined || sessionIdx === undefined) {
-      return NextResponse.json({ error: 'taskId, sourceFile, sessionIdx required' }, { status: 400 });
+    if (!taskId) {
+      return NextResponse.json({ error: 'taskId required' }, { status: 400 });
     }
 
     const updates = {};
@@ -36,8 +36,10 @@ export async function PATCH(request) {
     if (newEndedAt   !== undefined) updates.endedAt   = newEndedAt;
     if (newFocusLevel !== undefined) updates.focusLevel = newFocusLevel;
 
-    // Update JSON file (pending/routine/completed)
-    if (sourceFile !== 'current') {
+    // Update JSON file (pending/routine/completed) — skip for postgres-only rows
+    if (sourceFile === 'postgres') {
+      // No JSON file to update; Postgres update below handles it
+    } else if (sourceFile !== 'current') {
       const ok = store.updateSession(taskId, sourceFile, sessionIdx, updates);
       if (!ok) {
         return NextResponse.json({ error: 'Session not found in source file' }, { status: 404 });
@@ -71,6 +73,54 @@ export async function PATCH(request) {
         await pool.query(
           `UPDATE task_sessions SET ${setParts.join(', ')} WHERE task_id = $${vals.length - 1} AND started_at = $${vals.length}`,
           vals
+        );
+      }
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/sessions
+ * Delete a session from JSON file (today) or Postgres (historical).
+ *
+ * Body: {
+ *   taskId: string,
+ *   sourceFile: 'pending' | 'routine' | 'completed' | 'postgres',
+ *   sessionIdx?: number,   // required for JSON files
+ *   startedAt?: ISO string, // required for postgres
+ * }
+ */
+export async function DELETE(request) {
+  try {
+    const body = await request.json();
+    const { taskId, sourceFile, sessionIdx, startedAt } = body;
+
+    if (!taskId) {
+      return NextResponse.json({ error: 'taskId required' }, { status: 400 });
+    }
+
+    if (sourceFile === 'postgres') {
+      if (!startedAt) return NextResponse.json({ error: 'startedAt required for postgres' }, { status: 400 });
+      await pool.query(
+        `DELETE FROM task_sessions WHERE task_id = $1 AND started_at = $2`,
+        [taskId, startedAt]
+      );
+    } else {
+      if (sessionIdx === undefined || sessionIdx === null) {
+        return NextResponse.json({ error: 'sessionIdx required for JSON source' }, { status: 400 });
+      }
+      const ok = store.deleteSession(taskId, sourceFile, sessionIdx);
+      if (!ok) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+
+      // Also delete from Postgres if startedAt is provided
+      if (startedAt) {
+        await pool.query(
+          `DELETE FROM task_sessions WHERE task_id = $1 AND started_at = $2`,
+          [taskId, startedAt]
         );
       }
     }

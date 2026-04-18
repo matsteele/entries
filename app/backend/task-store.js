@@ -796,6 +796,23 @@ function updateSession(taskId, sourceFile, sessionIdx, updates) {
   return true;
 }
 
+function deleteSession(taskId, sourceFile, sessionIdx) {
+  const loaders = { pending: loadPending, routine: loadRoutine, completed: loadCompleted };
+  const savers  = { pending: savePending, routine: saveRoutine, completed: saveCompleted };
+
+  const loader = loaders[sourceFile];
+  const saver  = savers[sourceFile];
+  if (!loader) return false;
+
+  const tasks = loader();
+  const task = tasks.find(t => t.id === taskId);
+  if (!task || !task.sessions || !task.sessions[sessionIdx]) return false;
+
+  task.sessions.splice(sessionIdx, 1);
+  saver(tasks);
+  return true;
+}
+
 // ─── Exports ─────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -887,4 +904,5 @@ module.exports = {
 
   // Session editing
   updateSession,
+  deleteSession,
 };

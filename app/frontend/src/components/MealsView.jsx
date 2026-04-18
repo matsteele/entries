@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Box, Typography, Paper, Stack, Chip, Button, LinearProgress,
   IconButton, Drawer, TextField, ListItemButton, ListItemText, Tabs, Tab,
-  Divider, Tooltip,
+  Divider, Tooltip, Toolbar,
 } from '@mui/material';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -94,6 +94,7 @@ function MealPickerDrawer({ slot, slotData, meals, onSelect, onClose }) {
   return (
     <Drawer anchor="right" open={!!slot} onClose={onClose}
       PaperProps={{ sx: { width: 400, bgcolor: '#161616', display: 'flex', flexDirection: 'column' } }}>
+      <Toolbar variant="dense" />
       {/* Header */}
       <Box sx={{ px: 3, py: 2, borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography variant="subtitle1" sx={{ fontFamily: 'monospace', fontWeight: 600, flexGrow: 1 }}>

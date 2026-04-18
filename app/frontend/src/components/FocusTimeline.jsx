@@ -12,7 +12,7 @@ import TodayIcon from '@mui/icons-material/Today';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import {
   useFocusDay, useCalendarEvents, useMealPlan, useMeals, useSetMealSlot, useUpdateSession, useGroceryList, useSleepData,
-  useAllTasks, useTimeSums, useTaskAction, useReassignSession, useSaveSleepQuality,
+  useAllTasks, useTimeSums, useTaskAction, useReassignSession, useSaveSleepQuality, useDeleteSession,
 } from '../hooks/useApi';
 import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
 import { ActiveTask, AddTaskForm, ContextGroup, CompletedStrip } from './TasksView';
@@ -73,7 +73,7 @@ function getDisplayEndMs(dayStartMs, nowMs) {
   return dayStartMs + 86400000;
 }
 // Use browser timezone for time display
-const DISPLAY_TZ = typeof window !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'America/Chicago';
+const DISPLAY_TZ = typeof window !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'America/New_York';
 function formatTime(ms) {
   return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: DISPLAY_TZ });
 }
@@ -89,11 +89,34 @@ function clamp(val, min, max) { return Math.min(max, Math.max(min, val)); }
 function SessionReassignPopover({ anchorEl, onClose, segment, pending, routine }) {
   const [tab, setTab] = useState(0);
   const reassign = useReassignSession();
+  const taskAction = useTaskAction();
+  const deleteSession = useDeleteSession();
+  const updateSession = useUpdateSession();
 
   if (!segment) return null;
 
+  const isGap = segment.isGap;
   const tasks = tab === 0 ? (pending || []) : (routine || []).filter(t => t.title !== 'general');
-  const filtered = tasks.filter(t => t.id !== segment.taskId);
+  const filtered = isGap ? tasks : tasks.filter(t => t.id !== segment.taskId);
+
+  const handleDelete = () => {
+    deleteSession.mutate({
+      taskId: segment.taskId,
+      sourceFile: segment.sourceFile,
+      sessionIdx: segment.sessionIdx,
+      startedAt: segment.startedAt || new Date(segment.startMs).toISOString(),
+    }, { onSuccess: () => onClose() });
+  };
+
+  const handleFocusLevel = (level) => {
+    updateSession.mutate({
+      taskId: segment.taskId,
+      sourceFile: segment.sourceFile,
+      sessionIdx: segment.sessionIdx,
+      startedAt: segment.startedAt || new Date(segment.startMs).toISOString(),
+      newFocusLevel: level,
+    }, { onSuccess: () => onClose() });
+  };
 
   // Group by context
   const grouped = {};
@@ -106,11 +129,22 @@ function SessionReassignPopover({ anchorEl, onClose, segment, pending, routine }
   const ctxCfg = segment.activityContext ? CONTEXT_CONFIG[segment.activityContext] : {};
 
   const handleSelect = (toTask) => {
-    reassign.mutate({
-      fromTaskId: segment.taskId,
-      toTaskId: toTask.id,
-      sessionStartedAt: new Date(segment.startMs).toISOString(),
-    }, { onSuccess: () => onClose() });
+    if (isGap) {
+      // For gaps, create a new session for this task
+      taskAction.mutate({
+        action: 'add-session',
+        taskId: toTask.id,
+        startedAt: new Date(segment.startMs).toISOString(),
+        endedAt: new Date(segment.endMs).toISOString(),
+      }, { onSuccess: () => onClose() });
+    } else {
+      // For tracked sessions, reassign to new task
+      reassign.mutate({
+        fromTaskId: segment.taskId,
+        toTaskId: toTask.id,
+        sessionStartedAt: new Date(segment.startMs).toISOString(),
+      }, { onSuccess: () => onClose() });
+    }
   };
 
   return (
@@ -123,16 +157,54 @@ function SessionReassignPopover({ anchorEl, onClose, segment, pending, routine }
       slotProps={{ paper: { sx: { mb: 1 } } }}
       onClick={(e) => e.stopPropagation()}
     >
-      <Box sx={{ width: 320, maxHeight: 440 }}>
+      <Box sx={{ width: 320, maxHeight: 480 }}>
         <Box sx={{ px: 1.5, pt: 1.5, pb: 1 }}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {ctxCfg?.emoji} {segment.taskTitle}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, flex: 1, mr: 1 }}>
+              {isGap ? '⏱️ Untracked Time' : `${ctxCfg?.emoji} ${segment.taskTitle}`}
+            </Typography>
+            {!isGap && (
+              <IconButton
+                size="small"
+                onClick={handleDelete}
+                disabled={deleteSession.isPending}
+                sx={{ color: 'error.main', p: 0.25, mt: -0.25, flexShrink: 0 }}
+                title="Delete session"
+              >
+                🗑️
+              </IconButton>
+            )}
+          </Box>
           <Typography variant="caption" color="text.secondary">
             {formatTime(segment.startMs)} – {formatTime(segment.endMs)} ({formatDuration(segment.endMs - segment.startMs)})
           </Typography>
-          <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
-            Reassign this session to:
+          {!isGap && (
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                Focus: {FOCUS_LABEL[segment.focusLevel] || '—'}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                {[0,1,2,3,4,5].map(l => (
+                  <Box
+                    key={l}
+                    onClick={() => handleFocusLevel(l)}
+                    sx={{
+                      width: 28, height: 22, borderRadius: 1, cursor: 'pointer',
+                      bgcolor: segment.focusLevel === l ? FOCUS_COLOR[l] : 'rgba(255,255,255,0.08)',
+                      border: segment.focusLevel === l ? `1px solid ${FOCUS_COLOR[l]}` : '1px solid rgba(255,255,255,0.1)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.7rem', fontWeight: 600, color: segment.focusLevel === l ? '#fff' : 'text.secondary',
+                      '&:hover': { bgcolor: FOCUS_COLOR[l], opacity: 0.8 },
+                    }}
+                  >
+                    {l}
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )}
+          <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1 }}>
+            {isGap ? 'Assign this time to:' : 'Reassign this session to:'}
           </Typography>
         </Box>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
@@ -174,6 +246,47 @@ function StatCard({ label, value, sub }) {
       <Typography variant="caption" color="text.secondary">{label}</Typography>
       {sub && <Typography variant="caption" display="block" color="text.disabled">{sub}</Typography>}
     </Paper>
+  );
+}
+
+// ─── Daily Progress ───────────────────────────────────────────────────────────
+function DailyProgressBar({ label, value, max, unit, color }) {
+  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  const display = unit === '%' ? `${value}%` : `${value}${unit}`;
+  return (
+    <Box sx={{ mb: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.25 }}>
+        <Typography variant="body2" sx={{ fontSize: 12, fontWeight: 600, flex: 1 }}>{label}</Typography>
+        <Typography variant="caption" sx={{ fontSize: 11, color: pct >= 80 ? '#4CAF50' : 'text.secondary', fontFamily: 'monospace' }}>
+          {display}{max && unit !== '%' ? `/${max}${unit}` : ''}
+        </Typography>
+      </Box>
+      <LinearProgress
+        variant="determinate"
+        value={pct}
+        sx={{
+          height: 6, borderRadius: 3,
+          bgcolor: 'rgba(255,255,255,0.06)',
+          '& .MuiLinearProgress-bar': {
+            bgcolor: pct >= 80 ? '#4CAF50' : pct >= 40 ? '#FF9800' : color || '#90CAF9',
+            borderRadius: 3,
+          },
+        }}
+      />
+    </Box>
+  );
+}
+
+function DailyProgress({ focusedMins, pctTracked, pctActiveFocus }) {
+  return (
+    <Box sx={{ mb: 2, p: 1.5, bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 1, border: '1px solid rgba(255,255,255,0.06)' }}>
+      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, fontSize: 11, mb: 1, display: 'block' }}>
+        Daily Progress
+      </Typography>
+      <DailyProgressBar label="Focused Minutes (time × focus level)" value={focusedMins} max={1200} unit="fm" color="#90CAF9" />
+      <DailyProgressBar label="Tracked (% of day)" value={pctTracked} max={100} unit="%" color="#FF9800" />
+      <DailyProgressBar label="Deep Focus (f:3-5 % of awake)" value={pctActiveFocus} max={100} unit="%" color="#7C4DFF" />
+    </Box>
   );
 }
 
@@ -892,7 +1005,7 @@ function TimelineBar({ timeline, dayStartMs, nowMs, onBlockClick, isLive, onSess
             ? `Untracked: ${formatTime(sMs)} – ${formatTime(eMs)} (${formatDuration(eMs-sMs)})`
             : `${ctxCfg?.emoji||''} ${seg.taskTitle} · F:${fl} ${FOCUS_LABEL[fl]}\n${formatTime(sMs)} – ${formatTime(eMs)} (${formatDuration(eMs-sMs)})`;
           const canEdit = isLive && !seg.isGap && seg.sourceFile !== 'postgres' && !!seg.taskId;
-          const canReassign = !seg.isGap && !!seg.taskId;
+          const canReassign = !seg.isGap && !!seg.taskId || seg.isGap;
           return (
             <Tooltip key={i} title={reassignAnchor || dragOverride ? '' : <span style={{whiteSpace:'pre-line'}}>{tipLabel}</span>} placement="top" followCursor>
               <Box
@@ -1007,8 +1120,8 @@ export default function FocusTimeline({ onNavigate } = {}) {
 
   return (
     <Box>
-      {/* Current task — highlighted at the very top */}
-      <ActiveTask task={currentTask} action={taskAction} pending={tasksData?.pending} routine={tasksData?.routine} />
+      {/* Daily intentions — at the very top */}
+      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
 
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
         <Typography variant="h5" sx={{ flexGrow: 1 }}>Focus Timeline</Typography>
@@ -1023,21 +1136,7 @@ export default function FocusTimeline({ onNavigate } = {}) {
         {!isToday && <IconButton size="small" onClick={() => setSelectedDate(null)}><TodayIcon /></IconButton>}
       </Stack>
 
-      {(() => {
-        const totalMs = nowMs - dayStartMs;
-        const trackedMs = (summary.pctTracked / 100) * totalMs;
-        const sleepMs = lastNight ? lastNight.durationMinutes * 60000 : 0;
-        const activeMs = (summary.pctActive / 100) * trackedMs;
-        const awakeTrackedMs = trackedMs - sleepMs;
-        const pctActiveFocus = awakeTrackedMs > 60000 ? Math.min(100, Math.round((activeMs / awakeTrackedMs) * 100)) : (summary.pctActive || 0);
-        return (
-          <Stack direction="row" spacing={1.5} sx={{ mb: 2 }}>
-            <StatCard label="Focused Minutes" value={`${summary.focusedMins}fm`} sub="Σ focus×mins, f>0" />
-            <StatCard label="Tracked" value={`${summary.pctTracked}%`} sub="of day" />
-            <StatCard label="Active Focus" value={`${pctActiveFocus}%`} sub="awake tracked time at f>0" />
-          </Stack>
-        );
-      })()}
+      {/* stat cards removed — shown as bars in Daily Progress below */}
 
 
       <Paper sx={{ p: 2, mb: 2 }}>
@@ -1052,6 +1151,9 @@ export default function FocusTimeline({ onNavigate } = {}) {
             <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1, mb: 0.25, pl: `${Y_AXIS_WIDTH + 4}px`, fontSize: '0.58rem' }}>calendar</Typography>
             <CalendarOverlay events={calData.events} dayStartMs={dayStartMs} nowMs={nowMs} sleepStartMs={sleepStartMs} />
           </>
+        )}
+        {calData?.error && (
+          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1, pl: `${Y_AXIS_WIDTH + 4}px`, fontSize: '0.58rem' }}>calendar error: {calData.error}</Typography>
         )}
         <FastingBar dayStartMs={dayStartMs} nowMs={nowMs} mealPlan={mealPlanData} meals={mealsData?.meals} onMealSlotClick={setMealSlot} />
         {mealPlanData?.macroTotals && <MacroBar macroTotals={mealPlanData.macroTotals} />}
@@ -1112,10 +1214,23 @@ export default function FocusTimeline({ onNavigate } = {}) {
         <CompletedStrip completed={tasksData?.completed} />
       </Box>
 
-      {/* Daily intentions — write narrative, match goals */}
-      {isToday && <DailyIntentions date={displayDate} onNavigate={onNavigate} />}
-
-      {/* Weekly goal progress + today's focused minutes */}
+      {/* Daily + Weekly progress */}
+      {(() => {
+        const totalMs = nowMs - dayStartMs;
+        const sleepMs = lastNight ? lastNight.durationMinutes * 60000 : 0;
+        const awakeMs = totalMs - sleepMs;
+        // pctActive is % of tracked time with focus > 0; trackedMs excludes sleep (separate API)
+        const trackedMs = (summary.pctTracked / 100) * totalMs;
+        const activeMs = (summary.pctActive / 100) * trackedMs;
+        const pctActiveFocus = awakeMs > 60000 ? Math.min(100, Math.round((activeMs / awakeMs) * 100)) : 0;
+        return (
+          <DailyProgress
+            focusedMins={summary.focusedMins}
+            pctTracked={summary.pctTracked}
+            pctActiveFocus={pctActiveFocus}
+          />
+        );
+      })()}
       <WeeklyGoalsProgress />
 
       <ProtocolDrawer query={drawerBlock?.protocol} label={drawerBlock?.label} onClose={() => setDrawerBlock(null)} />

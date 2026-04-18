@@ -14,8 +14,23 @@ import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutline';
 import PauseIcon from '@mui/icons-material/Pause';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import AddIcon from '@mui/icons-material/Add';
+import NotesIcon from '@mui/icons-material/Notes';
 import { useAllTasks, useTimeSums, useTaskAction } from '../hooks/useApi';
 import { CONTEXT_CONFIG, CONTEXT_ORDER, formatMinutes } from '../lib/contexts';
+
+function todayMinutes(task) {
+  const today = new Date().toISOString().slice(0, 10);
+  const todayStart = new Date(today + 'T00:00:00').getTime();
+  const now = Date.now();
+  let total = 0;
+  for (const s of (task.sessions || [])) {
+    if (!s.startedAt) continue;
+    const start = Math.max(new Date(s.startedAt).getTime(), todayStart);
+    const end = s.endedAt ? Math.min(new Date(s.endedAt).getTime(), now) : now;
+    if (end > start) total += end - start;
+  }
+  return Math.round(total / 60000);
+}
 
 const CTX_OPTIONS = [
   { value: '', label: 'Auto' },
@@ -67,7 +82,7 @@ export function LevelPopover({ label, value, max, onSelect, pending }) {
   );
 }
 
-export function ActiveTask({ task, action, pending, routine }) {
+export function ActiveTask({ task, action, pending, routine, sticky }) {
   const [elapsed, setElapsed] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [tab, setTab] = useState(0);
@@ -86,8 +101,13 @@ export function ActiveTask({ task, action, pending, routine }) {
 
   if (!task) {
     return (
-      <Paper sx={{ p: 2, mb: 3, opacity: 0.6 }}>
-        <Typography variant="body2" color="text.secondary">No active task</Typography>
+      <Paper sx={{
+        p: 1.5, mb: 1, opacity: 0.5,
+        background: 'linear-gradient(135deg, rgba(40,40,40,0.95) 0%, rgba(30,30,30,0.95) 100%)',
+        backdropFilter: 'blur(8px)',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
+      }}>
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>No active task</Typography>
       </Paper>
     );
   }
@@ -118,16 +138,39 @@ export function ActiveTask({ task, action, pending, routine }) {
 
   return (
     <>
-      <Paper sx={{ p: 2, mb: 3, borderLeft: `4px solid ${ctx.color || '#666'}` }}>
-        <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
-          <PlayArrowIcon sx={{ color: '#4caf50', animation: 'pulse 1.5s infinite' }} />
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>{task.title}</Typography>
+      <Paper elevation={8} sx={{
+        p: 2, mb: 1,
+        background: `linear-gradient(135deg, ${ctx.color || '#ff9800'} 0%, ${ctx.color || '#ff9800'}88 30%, #111 100%)`,
+        borderBottom: `1px solid rgba(255,255,255,0.08)`,
+        boxShadow: `0 4px 24px ${ctx.color || '#ff9800'}40, 0 2px 8px rgba(0,0,0,0.6)`,
+        borderRadius: 1,
+      }}>
+        <Stack direction="row" alignItems="center" spacing={1.5} flexWrap="wrap">
+          <PlayArrowIcon sx={{
+            color: '#fff',
+            fontSize: 32,
+            animation: 'pulse 1.5s infinite',
+            filter: 'drop-shadow(0 0 4px rgba(255,255,255,0.5))',
+          }} />
+          <Typography variant="h5" sx={{
+            flexGrow: 1,
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            color: '#fff',
+            textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+          }}>{task.title}</Typography>
           <LevelPopover label="f" value={fl} max={5} pending={busy}
             onSelect={(v) => action.mutate({ action: 'set-focus', taskId: task.id, level: v })} />
           <LevelPopover label="p" value={task.priority} max={5} pending={busy}
             onSelect={(v) => action.mutate({ action: 'set-priority', taskId: task.id, level: v })} />
           <Chip label={`${ctx.emoji} ${ctx.label}`} size="small" sx={{ bgcolor: ctx.color, color: '#fff' }} />
-          <Typography variant="h6" sx={{ fontFamily: 'monospace', minWidth: 70, textAlign: 'right' }}>
+          <Typography variant="h5" sx={{
+            fontFamily: 'monospace',
+            minWidth: 80,
+            textAlign: 'right',
+            fontWeight: 700,
+            color: elapsed > 60 ? '#ff9800' : '#fff',
+          }}>
             {formatMinutes(elapsed)}
           </Typography>
           <Tooltip title="Switch task">
@@ -151,6 +194,16 @@ export function ActiveTask({ task, action, pending, routine }) {
               disabled={busy}
             >
               Pause
+            </Button>
+          </Tooltip>
+          <Tooltip title="Fill untracked time with unstructured">
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => action.mutate({ action: 'fill' })}
+              disabled={busy}
+            >
+              Fill
             </Button>
           </Tooltip>
           {!isRoutine && (
@@ -272,11 +325,13 @@ export function ActiveTask({ task, action, pending, routine }) {
 export function TaskRow({ task, action, onNavigate }) {
   const busy = action.isPending;
   const hasLineage = task.projectId || task.epicId;
+  const [expanded, setExpanded] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const notes = task.notes || [];
 
   const handleBreadcrumbClick = (e) => {
     e.stopPropagation();
     if (!onNavigate) return;
-    // Navigate to the most specific level available
     if (task.epicId) {
       onNavigate('planning', { goalId: task.goalId || task.projectId });
     } else if (task.projectId) {
@@ -284,10 +339,17 @@ export function TaskRow({ task, action, onNavigate }) {
     }
   };
 
+  const handleAddNote = () => {
+    if (!noteText.trim()) return;
+    action.mutate({ action: 'add-note', taskId: task.id, text: noteText.trim() }, {
+      onSuccess: () => setNoteText(''),
+    });
+  };
+
   return (
     <ListItem
       disableGutters
-      sx={{ px: 2, py: 0.5, borderBottom: '1px solid', borderColor: 'divider' }}
+      sx={{ px: 2, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', flexDirection: 'column', alignItems: 'stretch' }}
     >
       <Stack direction="row" alignItems="center" spacing={1} sx={{ width: '100%' }}>
         <Tooltip title="Switch to">
@@ -296,7 +358,26 @@ export function TaskRow({ task, action, onNavigate }) {
           </IconButton>
         </Tooltip>
         <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-          <Typography variant="body2" sx={{ lineHeight: 1.4 }}>{task.title}</Typography>
+          <Typography variant="body2" sx={{ lineHeight: 1.4 }}>
+            {(() => {
+              const match = task.title.match(/^(TSP-\d+)(:\s?)/);
+              if (!match) return task.title;
+              const ticket = match[1];
+              const sep = match[2];
+              const rest = task.title.slice(match[0].length);
+              const url = task.jiraUrl || `https://cultivo.atlassian.net/browse/${ticket}`;
+              return (
+                <>
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                    style={{ color: '#90CAF9', textDecoration: 'none' }}
+                    onMouseEnter={e => e.target.style.textDecoration = 'underline'}
+                    onMouseLeave={e => e.target.style.textDecoration = 'none'}
+                    onClick={e => e.stopPropagation()}
+                  >{ticket}</a>{sep}{rest}
+                </>
+              );
+            })()}
+          </Typography>
           {hasLineage && (
             <Typography
               variant="caption"
@@ -311,20 +392,62 @@ export function TaskRow({ task, action, onNavigate }) {
               {[task.goalTitle, task.projectTitle, task.epicTitle].filter(Boolean).join(' / ')}
             </Typography>
           )}
+          {notes.length > 0 && (
+            <Box sx={{ mt: 0.25 }}>
+              {notes.map((n, i) => (
+                <Typography key={i} variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.75rem', lineHeight: 1.3 }}>
+                  {n?.text ?? n}
+                </Typography>
+              ))}
+            </Box>
+          )}
         </Box>
-        {task.timeSpent ? (
-          <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', whiteSpace: 'nowrap' }}>
-            {formatMinutes(task.timeSpent)}
-          </Typography>
-        ) : null}
+        {(() => {
+          const dayMins = todayMinutes(task);
+          const totalMins = task.timeSpent || 0;
+          if (!dayMins && !totalMins) return null;
+          return (
+            <Stack direction="row" spacing={0.5} alignItems="baseline" sx={{ whiteSpace: 'nowrap' }}>
+              {dayMins > 0 && (
+                <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>
+                  {formatMinutes(dayMins)}
+                </Typography>
+              )}
+              {totalMins > 0 && totalMins !== dayMins && (
+                <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.disabled', fontSize: '0.6rem' }}>
+                  ({formatMinutes(totalMins)})
+                </Typography>
+              )}
+            </Stack>
+          );
+        })()}
         {task.jiraTicket && (
-          <Chip label={task.jiraTicket} size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
+          <Chip
+            label={task.jiraTicket}
+            size="small"
+            variant="outlined"
+            component="a"
+            href={task.jiraUrl || `https://cultivo.atlassian.net/browse/${task.jiraTicket}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            clickable
+            sx={{ fontSize: '0.65rem', height: 18, textDecoration: 'none' }}
+          />
         )}
         {task.googleTaskId && !task.jiraTicket && (
           <Tooltip title="From Google Tasks">
             <Chip label="GT" size="small" variant="outlined" sx={{ fontSize: '0.6rem', height: 18, opacity: 0.7 }} />
           </Tooltip>
         )}
+        <LevelPopover label="f" value={task.focusLevel} max={5} pending={busy}
+          onSelect={(v) => action.mutate({ action: 'set-focus', taskId: task.id, level: v })} />
+        <LevelPopover label="p" value={task.priority} max={5} pending={busy}
+          onSelect={(v) => action.mutate({ action: 'set-priority', taskId: task.id, level: v })} />
+        <Tooltip title="Notes">
+          <IconButton size="small" onClick={() => setExpanded(!expanded)} sx={{ opacity: notes.length > 0 ? 0.8 : 0.3, '&:hover': { opacity: 1 } }}>
+            <NotesIcon sx={{ fontSize: 14 }} />
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Complete">
           <IconButton size="small" onClick={() => action.mutate({ action: 'complete-task', taskId: task.id })} disabled={busy}>
             <CheckIcon sx={{ fontSize: 16 }} />
@@ -336,6 +459,22 @@ export function TaskRow({ task, action, onNavigate }) {
           </IconButton>
         </Tooltip>
       </Stack>
+      <Collapse in={expanded}>
+        <Stack direction="row" spacing={1} sx={{ pl: 5, pr: 2, py: 1 }}>
+          <TextField
+            size="small"
+            placeholder="Add a note..."
+            value={noteText}
+            onChange={(e) => setNoteText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddNote(); }}
+            sx={{ flexGrow: 1 }}
+            fullWidth
+          />
+          <Button size="small" variant="outlined" onClick={handleAddNote} disabled={busy || !noteText.trim()}>
+            Add
+          </Button>
+        </Stack>
+      </Collapse>
     </ListItem>
   );
 }
@@ -435,7 +574,7 @@ export function CompletedStrip({ completed }) {
 export function ContextGroup({ context, tasks, daySums, action, onNavigate }) {
   const [open, setOpen] = useState(true);
   const cfg = CONTEXT_CONFIG[context] || {};
-  const contextMinutes = daySums?.[context] || 0;
+  const contextMinutes = tasks.reduce((sum, t) => sum + todayMinutes(t), 0);
 
   if (!tasks.length) return null;
 
@@ -561,6 +700,14 @@ export default function TasksView() {
         <Typography variant="h5">Today's Tasks</Typography>
         <Chip label={`${pending.length} pending`} variant="outlined" size="small" />
         <Box sx={{ flexGrow: 1 }} />
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => action.mutate({ action: 'fill' })}
+          disabled={action.isPending}
+        >
+          Fill
+        </Button>
         <Button
           size="small"
           variant="outlined"

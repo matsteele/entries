@@ -190,6 +190,43 @@ export function fetchGmailFeed(force = false) {
     categories[email.category].push(email);
   }
 
+  // Auto-label job emails in Gmail
+  if (categories.jobs.length > 0) {
+    try {
+      const jobIds = categories.jobs.map(e => e.id);
+      // Check which ones already have the jobs label
+      const labelsResp = JSON.parse(execSync(
+        `curl -s -H "Authorization: Bearer ${accessToken}" ` +
+        `"https://gmail.googleapis.com/gmail/v1/users/me/labels"`,
+        { encoding: 'utf8', timeout: 10000 }
+      ));
+      let jobsLabel = (labelsResp.labels || []).find(l => l.name.toLowerCase() === 'job');
+      if (!jobsLabel) {
+        jobsLabel = JSON.parse(execSync(
+          `curl -s -X POST -H "Authorization: Bearer ${accessToken}" ` +
+          `-H "Content-Type: application/json" ` +
+          `-d '{"name":"job","labelListVisibility":"labelShow","messageListVisibility":"show"}' ` +
+          `"https://gmail.googleapis.com/gmail/v1/users/me/labels"`,
+          { encoding: 'utf8', timeout: 10000 }
+        ));
+      }
+      // Label any job emails that don't already have it
+      for (const email of categories.jobs) {
+        if (!email.labelIds || !email.labelIds.includes(jobsLabel.id)) {
+          try {
+            execSync(
+              `curl -s -X POST -H "Authorization: Bearer ${accessToken}" ` +
+              `-H "Content-Type: application/json" ` +
+              `-d '{"addLabelIds":["${jobsLabel.id}"]}' ` +
+              `"https://gmail.googleapis.com/gmail/v1/users/me/messages/${email.id}/modify"`,
+              { encoding: 'utf8', timeout: 10000 }
+            );
+          } catch { /* skip individual failures */ }
+        }
+      }
+    } catch { /* don't block fetch if labeling fails */ }
+  }
+
   const data = { emails, categories };
   if (!cache.gmail) cache.gmail = {};
   cache.gmail = { data, fetchedAt: now };
@@ -245,12 +282,12 @@ export function gmailAction(action, ids) {
             `"https://gmail.googleapis.com/gmail/v1/users/me/labels"`,
             { encoding: 'utf8', timeout: 10000 }
           ));
-          let jobsLabel = (labelsResp.labels || []).find(l => l.name.toLowerCase() === 'jobs');
+          let jobsLabel = (labelsResp.labels || []).find(l => l.name.toLowerCase() === 'job');
           if (!jobsLabel) {
             jobsLabel = JSON.parse(execSync(
               `curl -s -X POST -H "Authorization: Bearer ${accessToken}" ` +
               `-H "Content-Type: application/json" ` +
-              `-d '{"name":"jobs","labelListVisibility":"labelShow","messageListVisibility":"show"}' ` +
+              `-d '{"name":"job","labelListVisibility":"labelShow","messageListVisibility":"show"}' ` +
               `"https://gmail.googleapis.com/gmail/v1/users/me/labels"`,
               { encoding: 'utf8', timeout: 10000 }
             ));

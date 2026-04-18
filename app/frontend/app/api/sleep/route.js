@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { Pool } from 'pg';
 export const dynamic = 'force-dynamic';
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const TRACKING_DIR = path.resolve(process.cwd(), '..', '..', 'tracking');
 const SLEEP_DIR = path.join(TRACKING_DIR, 'sleep');
@@ -26,7 +29,8 @@ function loadStrategies() {
  * Returns sleep + rest sessions for the past N days.
  * Merges routine.json sessions with sleep-log files for quality/strategy data.
  */
-export function GET(request) {
+// eslint-disable-next-line @typescript-eslint/require-await
+export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const date = searchParams.get('date') || new Date().toISOString().slice(0, 10);
@@ -154,6 +158,23 @@ export function GET(request) {
       usageCount: s.count,
     })).sort((a, b) => b.avgQuality - a.avgQuality);
 
+    // Work sessions from PostgreSQL for this date window
+    let workSessions = [];
+    try {
+      const wsStart = new Date(windowStart).toISOString();
+      const wsEnd   = new Date(windowEnd).toISOString();
+      const wsResult = await pool.query(
+        `SELECT started_at, ended_at FROM task_sessions
+         WHERE started_at >= $1 AND ended_at <= $2 AND ended_at IS NOT NULL
+         ORDER BY started_at`,
+        [wsStart, wsEnd]
+      );
+      workSessions = wsResult.rows.map(r => ({
+        startedAt: r.started_at,
+        endedAt:   r.ended_at,
+      }));
+    } catch (_) { /* pg not available — skip silently */ }
+
     return NextResponse.json({
       date,
       lastNight: todaySleep || null,
@@ -171,7 +192,124 @@ export function GET(request) {
       restRecords,
       strategyEffectiveness,
       strategies: strategies.strategies || [],
+      workSessions,
     });
+  } catch (err) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+function saveRoutine(tasks) {
+  fs.writeFileSync(path.join(TRACKING_DIR, 'routine.json'), JSON.stringify(tasks, null, 2), 'utf8');
+}
+
+function findSleepTask(routine, type) {
+  if (type === 'rest') return routine.find(t => t.title === 'resting');
+  return routine.find(t => t.title === 'sleeping' || t.title?.toLowerCase().includes('sleep'));
+}
+
+/**
+ * PATCH /api/sleep — update a sleep/rest session's times
+ * Body: { type?: 'sleep'|'rest', startedAt, newStartedAt?, newEndedAt? }
+ */
+export async function PATCH(request) {
+  try {
+    const { type = 'sleep', startedAt, newStartedAt, newEndedAt } = await request.json();
+    if (!startedAt) return NextResponse.json({ error: 'startedAt required' }, { status: 400 });
+
+    const routine = loadRoutine();
+    const task = findSleepTask(routine, type);
+    if (!task?.sessions) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+    const s = task.sessions.find(s => s.startedAt === startedAt);
+    if (!s) return NextResponse.json({ error: 'session not found' }, { status: 404 });
+
+    if (newStartedAt) s.startedAt = newStartedAt;
+    if (newEndedAt)   s.endedAt   = newEndedAt;
+    saveRoutine(routine);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+/**
+ * PUT /api/sleep — add a session or fill-default for future days
+ * Body: { type?, startedAt, endedAt }
+ *    or { action: 'fill-default', startHour, startMin, endHour, endMin, days, existingDates }
+ */
+export async function PUT(request) {
+  try {
+    const body = await request.json();
+    const routine = loadRoutine();
+
+    if (body.action === 'fill-default') {
+      const { startHour, startMin, endHour, endMin, days = 14, existingDates = [] } = body;
+      const task = findSleepTask(routine, 'sleep');
+      if (!task) return NextResponse.json({ error: 'sleep task not found' }, { status: 404 });
+      if (!task.sessions) task.sessions = [];
+
+      let filled = 0;
+      const today = new Date();
+      // Fill backward: today's night, then yesterday's, etc.
+      for (let i = 0; i < days; i++) {
+        const sleepDay = new Date(today); sleepDay.setDate(today.getDate() - i);
+        const wakeDay  = new Date(today); wakeDay.setDate(today.getDate() - i + 1);
+        const wakeDateStr = wakeDay.toISOString().slice(0, 10);
+        if (existingDates.includes(wakeDateStr)) continue;
+
+        const startedAt = new Date(sleepDay);
+        startedAt.setHours(startHour, startMin, 0, 0);
+        const endedAt = new Date(wakeDay);
+        endedAt.setHours(endHour, endMin, 0, 0);
+
+        // Don't duplicate
+        if (!task.sessions.find(s => s.startedAt === startedAt.toISOString())) {
+          task.sessions.push({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString() });
+          filled++;
+        }
+      }
+      saveRoutine(routine);
+      return NextResponse.json({ ok: true, filled });
+    }
+
+    // Add single session
+    const { type = 'sleep', startedAt, endedAt } = body;
+    if (!startedAt || !endedAt) return NextResponse.json({ error: 'startedAt and endedAt required' }, { status: 400 });
+
+    const task = findSleepTask(routine, type);
+    if (!task) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+    if (!task.sessions) task.sessions = [];
+
+    if (!task.sessions.find(s => s.startedAt === startedAt)) {
+      task.sessions.push({ startedAt, endedAt });
+      saveRoutine(routine);
+    }
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/sleep — remove a session by startedAt
+ * Body: { type?, startedAt }
+ */
+export async function DELETE(request) {
+  try {
+    const { type = 'sleep', startedAt } = await request.json();
+    if (!startedAt) return NextResponse.json({ error: 'startedAt required' }, { status: 400 });
+
+    const routine = loadRoutine();
+    const task = findSleepTask(routine, type);
+    if (!task?.sessions) return NextResponse.json({ error: 'task not found' }, { status: 404 });
+
+    const idx = task.sessions.findIndex(s => s.startedAt === startedAt);
+    if (idx < 0) return NextResponse.json({ error: 'session not found' }, { status: 404 });
+
+    task.sessions.splice(idx, 1);
+    saveRoutine(routine);
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

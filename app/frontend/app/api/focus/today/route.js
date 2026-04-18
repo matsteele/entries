@@ -10,15 +10,15 @@ export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get('date'); // YYYY-MM-DD or null
-    const tz = searchParams.get('tz') || 'America/Chicago'; // browser timezone
+    const tz = searchParams.get('tz') || 'America/New_York'; // browser timezone
     const todayStr  = store.getLocalDate();
 
     // Resolve midnight in the user's timezone via Postgres
     const tzQuery = dateParam && dateParam !== todayStr
-      ? `SELECT ($1::date AT TIME ZONE $2)::timestamptz AS day_start,
-                (($1::date + interval '1 day') AT TIME ZONE $2)::timestamptz AS day_end`
-      : `SELECT (CURRENT_DATE AT TIME ZONE $1)::timestamptz AS day_start,
-                ((CURRENT_DATE + interval '1 day') AT TIME ZONE $1)::timestamptz AS day_end`;
+      ? `SELECT ($1::timestamp AT TIME ZONE $2) AS day_start,
+                (($1::timestamp + interval '1 day') AT TIME ZONE $2) AS day_end`
+      : `SELECT (CURRENT_DATE::timestamp AT TIME ZONE $1) AS day_start,
+                ((CURRENT_DATE::timestamp + interval '1 day') AT TIME ZONE $1) AS day_end`;
     const tzParams = dateParam && dateParam !== todayStr ? [dateParam, tz] : [tz];
     const tzResult = await pool.query(tzQuery, tzParams);
     const dayStartMs = new Date(tzResult.rows[0].day_start).getTime();

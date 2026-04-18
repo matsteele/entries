@@ -45,21 +45,22 @@ function buildTimeline(rawSessions, dayStartMs, endMs) {
   const totalMs    = endMs - dayStartMs;
   const pctTracked = totalMs > 0 ? Math.min(100, Math.round((trackedMs / totalMs) * 100)) : 0;
 
-  // Merge active intervals (f>0) to avoid double-counting overlaps
-  const activeSorted = sorted.filter(s => s.focusLevel > 0).sort((a, b) => a.startMs - b.startMs);
+  // Focused minutes: all sessions, minutes × focus level
+  const focusedMs  = sorted.reduce((acc, s) => acc + s.focusLevel * (s.endMs - s.startMs), 0);
+  const focusedMins = Math.round(focusedMs / 60000);
+
+  // Active focus: only sessions with focus >= 3, merge to avoid double-counting overlaps
+  const activeSorted = sorted.filter(s => s.focusLevel >= 3).sort((a, b) => a.startMs - b.startMs);
   const activeMerged = [];
   for (const s of activeSorted) {
     if (activeMerged.length && s.startMs <= activeMerged[activeMerged.length - 1].endMs) {
       const last = activeMerged[activeMerged.length - 1];
       last.endMs = Math.max(last.endMs, s.endMs);
-      last.focusLevel = Math.max(last.focusLevel, s.focusLevel);
     } else {
-      activeMerged.push({ ...s });
+      activeMerged.push({ startMs: s.startMs, endMs: s.endMs });
     }
   }
   const activeMs   = activeMerged.reduce((acc, s) => acc + (s.endMs - s.startMs), 0);
-  const focusedMs  = activeMerged.reduce((acc, s) => acc + s.focusLevel * (s.endMs - s.startMs), 0);
-  const focusedMins = Math.round(focusedMs / 60000);
   const pctActive  = trackedMs > 0 ? Math.min(100, Math.round((activeMs / trackedMs) * 100)) : 0;
 
   return { timeline, summary: { focusedMins, pctTracked, pctActive } };

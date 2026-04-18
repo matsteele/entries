@@ -125,9 +125,30 @@ export async function POST(request) {
       case 'pull-jira':
         output = runCli('jira');
         break;
+      case 'fill':
+        output = runCli('fill');
+        break;
       case 'add-note': {
         if (!params.text) return NextResponse.json({ error: 'text required' }, { status: 400 });
-        output = runCli('note', params.text);
+        if (params.taskId) {
+          // Add note to a specific pending task by ID
+          try {
+            const pending = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8'));
+            const task = pending.find(t => t.id === params.taskId);
+            if (task) {
+              if (!task.notes) task.notes = [];
+              task.notes.push({ text: params.text, at: new Date().toISOString() });
+              fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2) + '\n');
+              output = `Note added to "${task.title}"`;
+            } else {
+              return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+            }
+          } catch (e) {
+            return NextResponse.json({ error: e.message }, { status: 500 });
+          }
+        } else {
+          output = runCli('note', params.text);
+        }
         break;
       }
       case 'add-from-feed': {
@@ -181,6 +202,71 @@ export async function POST(request) {
             fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2) + '\n');
           }
         } catch (e) { /* metadata is best-effort */ }
+        break;
+      }
+      case 'add-routine-from-plan': {
+        if (!params.title) return NextResponse.json({ error: 'title required' }, { status: 400 });
+        const routineArgs = ['add', params.title];
+        if (params.context) routineArgs.push(params.context);
+        routineArgs.push('r');
+        output = runCli(...routineArgs);
+        // Attach plan lineage metadata to the newly created routine task
+        try {
+          const ROUTINE_FILE = path.join(TRACKING_DIR, 'routine.json');
+          const routine = JSON.parse(fs.readFileSync(ROUTINE_FILE, 'utf8'));
+          const last = routine[routine.length - 1];
+          if (last) {
+            if (params.projectId) last.projectId = params.projectId;
+            if (params.epicId) last.epicId = params.epicId;
+            if (params.goalId) last.goalId = params.goalId;
+            if (params.projectTitle) last.projectTitle = params.projectTitle;
+            if (params.goalTitle) last.goalTitle = params.goalTitle;
+            fs.writeFileSync(ROUTINE_FILE, JSON.stringify(routine, null, 2) + '\n');
+          }
+        } catch (e) { /* metadata is best-effort */ }
+        break;
+      }
+      case 'add-session': {
+        if (!params.taskId) return NextResponse.json({ error: 'taskId required' }, { status: 400 });
+        if (!params.startedAt || !params.endedAt) return NextResponse.json({ error: 'startedAt and endedAt required' }, { status: 400 });
+        const ROUTINE_FILE = path.join(TRACKING_DIR, 'routine.json');
+        try {
+          // Find task in pending or routine
+          let pending = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8'));
+          let routine = JSON.parse(fs.readFileSync(ROUTINE_FILE, 'utf8'));
+          let task = pending.find(t => t.id === params.taskId) || routine.find(t => t.id === params.taskId);
+          if (!task) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+
+          const session = { startedAt: params.startedAt, endedAt: params.endedAt };
+          const elapsedMinutes = Math.round((new Date(params.endedAt) - new Date(params.startedAt)) / 60000);
+          if (!task.sessions) task.sessions = [];
+          task.sessions.push(session);
+          task.timeSpent = (task.timeSpent || 0) + elapsedMinutes;
+
+          // Save back to the correct file
+          if (pending.some(t => t.id === params.taskId)) {
+            fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2) + '\n');
+          } else {
+            fs.writeFileSync(ROUTINE_FILE, JSON.stringify(routine, null, 2) + '\n');
+          }
+
+          // Also write to Postgres (best-effort)
+          try {
+            const { Pool } = await import('pg');
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+            await pool.query(
+              `INSERT INTO task_sessions (task_id, task_title, context, focus_level, started_at, ended_at)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT DO NOTHING`,
+              [task.id, task.title, task.activityContext || 'unstructured', task.focusLevel || 2, params.startedAt, params.endedAt]
+            );
+            await pool.end();
+          } catch (e) { /* postgres is best-effort */ }
+
+          output = `Session added to "${task.title}" (${elapsedMinutes}m)`;
+        } catch (e) {
+          return NextResponse.json({ error: e.message }, { status: 500 });
+        }
         break;
       }
       default:

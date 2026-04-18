@@ -21,7 +21,7 @@ async function generateEmbedding(text) {
 }
 
 async function backfillEmbeddings() {
-  const tables = ['journals', 'protocols', 'plans'];
+  const tables = ['journals', 'protocols', 'plans', 'content'];
 
   for (const table of tables) {
     const { rows } = await pool.query(
@@ -64,7 +64,7 @@ async function semanticSearch(query, options = {}) {
   const queryEmbedding = await generateEmbedding(query);
   const vectorStr = `[${queryEmbedding.join(',')}]`;
 
-  const tables = table ? [table] : ['journals', 'protocols', 'plans'];
+  const tables = table ? [table] : ['journals', 'protocols', 'plans', 'content'];
   let allResults = [];
 
   for (const t of tables) {
@@ -86,6 +86,16 @@ async function semanticSearch(query, options = {}) {
         SELECT id, title, category, LEFT(content, 500) as snippet,
           1 - (embedding <=> $1::vector) as similarity
         FROM protocols
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> $1::vector
+        LIMIT $2
+      `;
+      params = [vectorStr, limit];
+    } else if (t === 'content') {
+      sql = `
+        SELECT id, title, series, status, context, LEFT(content, 500) as snippet,
+          1 - (embedding <=> $1::vector) as similarity
+        FROM content
         WHERE embedding IS NOT NULL
         ORDER BY embedding <=> $1::vector
         LIMIT $2
